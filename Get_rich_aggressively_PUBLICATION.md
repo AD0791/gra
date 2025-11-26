@@ -1,400 +1,253 @@
-# Get_rich_aggressively - Professional Order Flow Indicator
+# 🚀 GET RICH AGGRESSIVELY v4 - TIER SYSTEM
 
-## 📊 Overview
-
-**Get_rich_aggressively (GRA)** is a professional-grade order flow indicator designed for futures and crypto traders who understand Auction Market Theory and want to identify high-probability setups with exceptional risk-to-reward ratios (3:1 to 5:1).
-
-This indicator answers the two most critical questions in trading:
-1. **Who is in control?** Bulls or Bears based on volume delta and aggression
-2. **Where are traders trapped?** Identifying failed breakouts that lead to explosive moves
-
-Built specifically for **NQ (Nasdaq 100 Futures)**, **GC (Gold Futures)**, and **BTC (Bitcoin)**, with optimized settings for each instrument's unique volatility profile.
+### Precision Futures Scalping | NQ • YM • GC
+### *Leave Every Trade With Money*
 
 ---
 
-## 🎯 Core Concepts
+## 🎯 THE TIER SYSTEM
 
-### Volume Delta & Imbalance
-The indicator calculates **buying pressure vs selling pressure** within each candle using intrabar analysis. When one side significantly overpowers the other, an **imbalance** exists—these are the moments where price moves with conviction.
-
-**Imbalance Ratio Interpretation:**
-- `1.5:1` → Moderate imbalance (tradeable)
-- `2.0:1` → Strong imbalance (high conviction)
-- `3.0:1+` → Extreme imbalance (institutional activity)
-
-### Aggression Detection
-The indicator identifies which side is **aggressing** (hitting market orders) vs **absorbing** (resting limit orders). When aggressive buyers overwhelm sellers, price moves UP. When aggressive sellers overwhelm buyers, price moves DOWN.
-
-### Trap Detection
-**Bull Traps** and **Bear Traps** are failed breakouts where traders get caught on the wrong side. These setups often lead to explosive reversals as trapped traders are forced to exit.
+| Tier | Points | Action | Stop Loss |
+|:----:|:------:|:------:|:---------:|
+| 🥇 **S-TIER** | 100+ | HOLD LONGER | At WICK |
+| 🥈 **A-TIER** | 50-99 | HOLD A BIT | At MID-WICK |
+| 🥉 **B-TIER** | 10-49 | CLOSE QUICK | At BODY |
+| ❌ **NO TIER** | < 10 | NO TRADE | — |
 
 ---
 
-## 🔧 How To Use
+## 🛡️ STOP LOSS POSITIONING (OHLC-BASED)
 
-### Visual Elements
+The SL is placed **WITHIN the candle structure** based on tier.  
+Wider SL for bigger moves, tighter SL for scalps.
 
-| Element | Meaning |
-|---------|---------|
-| **Green Bubbles** (below bar) | Bullish volume aggression - buyers winning |
-| **Red Bubbles** (above bar) | Bearish volume aggression - sellers winning |
-| **▲ Triangle Up** | Long signal (3:1 or 4:1+ R:R) |
-| **▼ Triangle Down** | Short signal (3:1 or 4:1+ R:R) |
-| **BT / BT!** | Bull Trap (short opportunity) |
-| **BrT / BrT!** | Bear Trap (long opportunity) |
-| **Diamond** | Absorption candle (institutional activity) |
-| **Colored Candles** | Green = positive delta, Red = negative delta |
-
-### Info Panel (Top Right)
-
-| Field | Description |
-|-------|-------------|
-| **Delta** | Current bar's volume delta (buy - sell pressure) |
-| **Vol** | Volume ratio vs 20-period average |
-| **Imb** | Imbalance ratio (who's winning) |
-| **Ctrl** | Who's in control: BULLS / BEARS |
-| **CVD** | Cumulative Volume Delta for session |
-| **Sess** | Current session (LDN! = London Open, NY! = NY Open) |
-| **Mkt** | Market condition: CHOP / FV / IMB! / OK |
-| **Sig** | Active signal if any |
-
-### Signal Hierarchy
-
-**High Conviction Signals (4:1+ R:R):**
-- Displayed as `▲ 4:1+` or `▼ 4:1+`
-- Require: Strong imbalance (2:1+) + Big volume (2.5x+) + Delta trend confirmation
-- Best during London Open or NY Open sessions
-
-**Standard Signals (3:1 R:R):**
-- Displayed as `▲ 3:1` or `▼ 3:1`
-- Require: Moderate imbalance (1.5:1+) + Volume spike (1.5x+)
-- Good any time market is not choppy
-
-**Trap Signals:**
-- `BT!` = Strong Bull Trap → SHORT
-- `BrT!` = Strong Bear Trap → LONG
-- Occur at swing highs/lows with rejection wicks
-
----
-
-## ⚙️ Recommended Settings by Instrument
-
-### 📈 NQ (Nasdaq 100 E-mini Futures)
-
-NQ is highly liquid with clear institutional footprints. The default settings work excellently.
+### 📈 LONG TRADE STOP LOSS
 
 ```
-═══════════ VOLUME ANALYSIS ═══════════
-Volume MA Length: 20
-Volume Spike Threshold: 1.5
-Big Trade Threshold: 2.5
-Extreme Volume Threshold: 4.0
-
-═══════════ IMBALANCE DETECTION ═══════════
-Imbalance Ratio Threshold: 1.5
-Strong Imbalance Threshold: 2.0
-Delta Confirmation Bars: 3
-Fair Value Range (%): 0.3
-
-═══════════ TRAP DETECTION ═══════════
-Swing Lookback Period: 20
-Minimum Wick Ratio: 0.4
-Max Body Ratio (Absorption): 0.35
-
-═══════════ SESSION SETTINGS ═══════════
-Timezone: America/New_York
-London Open Window: 0300-0500
-NY Open Window: 0930-1130
-Only Signal During Key Sessions: OFF (or ON for higher conviction)
-
-═══════════ TIMEFRAME SETTINGS ═══════════
-Analysis Timeframe: 1 (1-minute intrabar analysis)
-Use Intrabar Analysis: ON
+              HIGH ─────────────
+                │
+                │  ← Upper Wick
+                │
+        BODY   ─┼─ CLOSE (bullish)
+        HIGH    │
+                │  ← Body
+                │
+        BODY   ─┼─ OPEN
+        LOW     │
+                │  ← Lower Wick
+                │
+              LOW ──────────────
 ```
 
-**Best Timeframes for NQ:**
-- **1-minute**: Scalping, quick entries
-- **5-minute**: Day trading (RECOMMENDED)
-- **15-minute**: Swing entries within day
+| Tier | SL Position | Why |
+|:----:|:------------|:----|
+| 🥉 B-TIER | Just below **BODY LOW** | Quick scalp, minimize risk |
+| 🥈 A-TIER | **Midpoint** of lower wick | Give room but not too much |
+| 🥇 S-TIER | At candle **LOW** | Big move expected, avoid fake-outs |
 
-**NQ Trading Tips:**
-- Most reliable signals occur during **9:30-11:30 AM EST** (NY Open)
-- Watch for traps at **overnight high/low** levels
-- Volume spikes of **3x+** often precede 10-20 point moves
-- Avoid trading during **12:00-2:00 PM EST** (lunch chop)
-
----
-
-### 🥇 GC (Gold Futures)
-
-Gold has different volatility patterns. Increase thresholds slightly to filter noise.
+### 📉 SHORT TRADE STOP LOSS
 
 ```
-═══════════ VOLUME ANALYSIS ═══════════
-Volume MA Length: 20
-Volume Spike Threshold: 1.8        ← Increased (gold has more noise)
-Big Trade Threshold: 3.0           ← Increased
-Extreme Volume Threshold: 5.0      ← Increased
-
-═══════════ IMBALANCE DETECTION ═══════════
-Imbalance Ratio Threshold: 1.6     ← Slightly higher
-Strong Imbalance Threshold: 2.2    ← Slightly higher
-Delta Confirmation Bars: 4         ← More confirmation needed
-Fair Value Range (%): 0.4          ← Gold chops more
-
-═══════════ TRAP DETECTION ═══════════
-Swing Lookback Period: 25          ← Wider swings
-Minimum Wick Ratio: 0.45           ← Bigger wicks needed
-Max Body Ratio (Absorption): 0.30  ← Tighter for absorption
-
-═══════════ SESSION SETTINGS ═══════════
-Timezone: America/New_York
-London Open Window: 0300-0500      ← Gold moves well here
-NY Open Window: 0830-1030          ← Earlier due to economic news
-Only Signal During Key Sessions: ON ← Recommended for GC
-
-═══════════ TIMEFRAME SETTINGS ═══════════
-Analysis Timeframe: 1
-Use Intrabar Analysis: ON
+              HIGH ─────────────
+                │
+                │  ← Upper Wick
+                │
+        BODY   ─┼─ OPEN
+        HIGH    │
+                │  ← Body
+                │
+        BODY   ─┼─ CLOSE (bearish)
+        LOW     │
+                │  ← Lower Wick
+                │
+              LOW ──────────────
 ```
 
-**Best Timeframes for GC:**
-- **5-minute**: Day trading (RECOMMENDED)
-- **15-minute**: Position entries
-- **1-hour**: Swing trading
-
-**Gold Trading Tips:**
-- Gold reacts strongly to **economic data releases** (8:30 AM EST)
-- **London session** (3-5 AM EST) often sets the daily direction
-- Watch for traps at **round numbers** ($2000, $2050, etc.)
-- Gold respects **previous day high/low** as key levels
-- Absorption candles near support/resistance signal reversals
+| Tier | SL Position | Why |
+|:----:|:------------|:----|
+| 🥉 B-TIER | Just above **BODY HIGH** | Quick scalp, minimize risk |
+| 🥈 A-TIER | **Midpoint** of upper wick | Give room but not too much |
+| 🥇 S-TIER | At candle **HIGH** | Big move expected, avoid fake-outs |
 
 ---
 
-### ₿ BTC (Bitcoin)
-
-Bitcoin trades 24/7 with unique session dynamics. Adjust for higher volatility.
+## 📊 VISUAL GUIDE
 
 ```
-═══════════ VOLUME ANALYSIS ═══════════
-Volume MA Length: 30               ← Longer average (24/7 market)
-Volume Spike Threshold: 2.0        ← Higher threshold (crypto volatility)
-Big Trade Threshold: 3.5           ← Higher for significance
-Extreme Volume Threshold: 6.0      ← Much higher for crypto
-
-═══════════ IMBALANCE DETECTION ═══════════
-Imbalance Ratio Threshold: 1.7     ← Higher due to volatility
-Strong Imbalance Threshold: 2.5    ← Higher for conviction
-Delta Confirmation Bars: 3
-Fair Value Range (%): 0.5          ← BTC ranges more
-
-═══════════ TRAP DETECTION ═══════════
-Swing Lookback Period: 30          ← Wider lookback
-Minimum Wick Ratio: 0.5            ← BTC has massive wicks
-Max Body Ratio (Absorption): 0.25  ← Tighter (many dojis in crypto)
-
-═══════════ SESSION SETTINGS ═══════════
-Timezone: America/New_York
-London Open Window: 0300-0500      ← European session start
-NY Open Window: 0930-1130          ← US session (big moves)
-Only Signal During Key Sessions: OFF ← BTC moves 24/7
-
-═══════════ TIMEFRAME SETTINGS ═══════════
-Analysis Timeframe: 1
-Use Intrabar Analysis: ON
+                ────── SL LINE (Short S-Tier)
+                HIGH
+       ▼ [S]      │    ← SHORT Signal above candle
+                  │
+                ──┼── SL LINE (Short A-Tier)
+                  │
+          BODY   ─┼─ 
+                  │    ← THE CANDLE
+          BODY   ─┼─
+                  │
+                ──┼── SL LINE (Long A-Tier)
+                  │
+       [A] ▲     LOW  ← LONG Signal below candle
+                ────── SL LINE (Long S-Tier)
 ```
 
-**Best Timeframes for BTC:**
-- **5-minute**: Active trading
-- **15-minute**: Day trading (RECOMMENDED)
-- **1-hour**: Swing trading
-- **4-hour**: Position trading
-
-**Bitcoin Trading Tips:**
-- **US Session** (9:30 AM - 4:00 PM EST) has highest volume
-- **Asian Session** (8 PM - 4 AM EST) often consolidates
-- Watch for traps at **psychological levels** ($60K, $65K, $70K, etc.)
-- **Funding rate flips** often coincide with trap signals
-- Weekend volume is lower—signals less reliable
+**Signal Elements:**
+- `▲ / ▼` = Direction arrow
+- `[S/A/B]` = Tier badge
+- `─────` = Stop Loss line (at OHLC level)
 
 ---
 
-## 📋 Trading Playbook
+## ✅ SIGNAL REQUIREMENTS
 
-### Setup 1: High Conviction Imbalance Entry
+**All must be TRUE for a signal:**
 
-**Conditions:**
-- ▲ or ▼ signal appears with "4:1+" label
-- Info panel shows "Ctrl: BULLS" or "Ctrl: BEARS"
-- Info panel shows "Mkt: IMB!"
-- During active session (LDN! or NY!)
+- [ ] Points ≥ 10 (B-tier minimum)
+- [ ] Volume ≥ 1.3x average
+- [ ] Delta dominance ≥ 55%
+- [ ] Candle direction = Delta direction
+- [ ] In session (if filter ON)
 
-**Entry:** Market order on signal bar close
-**Stop Loss:** Beyond the signal candle's wick
-**Take Profit:** 4:1 risk-to-reward minimum
+> ⚠️ **ANY condition FALSE = NO SIGNAL = NO TRADE**
 
 ---
 
-### Setup 2: Trap Reversal
+## 📋 TRADING BY TIER
 
-**Conditions:**
-- BT! (Bull Trap) or BrT! (Bear Trap) appears
-- Signal occurs at swing high/low
-- Volume spike confirms (2x+ average)
+### 🥇 S-TIER (100+ points)
 
-**Entry:** 
-- Bull Trap → SHORT on close below signal bar
-- Bear Trap → LONG on close above signal bar
+| | |
+|:--|:--|
+| **SL Position** | At wick extreme (LOW for long, HIGH for short) |
+| **Entry** | Candle close |
+| **Stop** | SL line (DO NOT MOVE CLOSER) |
+| **Action** | HOLD LONGER |
 
-**Stop Loss:** Beyond the trap wick
-**Take Profit:** Previous swing level (3:1+ R:R typical)
+**Management:**
+- Watch next candle
+- Continues? → HOLD
+- Same tier same direction? → ADD
+- Reverses? → EXIT on close
 
----
-
-### Setup 3: Absorption Reversal
-
-**Conditions:**
-- Diamond marker appears (absorption)
-- At key support/resistance level
-- Followed by opposite-colored candle with volume
-
-**Entry:** On confirmation candle close
-**Stop Loss:** Beyond absorption candle
-**Take Profit:** 2:1 minimum
+> 💡 **Why wide SL:** This is institutional movement. Fake-outs are common. Give it room.
 
 ---
 
-### Setup 4: Session Open Momentum
+### 🥈 A-TIER (50-99 points)
 
-**Conditions:**
-- "L" (London) or "N" (NY) session marker appears
-- First 30 minutes show clear delta direction
-- Imbalance ratio > 1.5:1
+| | |
+|:--|:--|
+| **SL Position** | Mid-wick (halfway between body and wick extreme) |
+| **Entry** | Candle close |
+| **Stop** | SL line |
+| **Action** | HOLD A BIT |
 
-**Entry:** With the dominant delta direction
-**Stop Loss:** Session open price
-**Take Profit:** Previous day high/low or 3:1 R:R
+**Management:**
+- Target 1:1 R:R minimum
+- Trail to breakeven if continues
+- Stalls? → Take profit
+- Reverses? → EXIT
 
----
-
-## ⚠️ When NOT to Trade
-
-Avoid taking signals when:
-
-1. **Info panel shows "Mkt: CHOP"** - Market is ranging without conviction
-2. **Info panel shows "Mkt: FV"** - Fair value zone, expect mean reversion
-3. **Ctrl shows "---"** - Neither side in control
-4. **During lunch hours** (12:00-2:00 PM EST for futures)
-5. **Before major news** (FOMC, NFP, CPI)
-6. **Low volume sessions** (holidays, weekends for futures)
+> 💡 **Why mid-wick SL:** Good move but not exceptional. Balance between room and risk.
 
 ---
 
-## 🔔 Alerts Setup
+### 🥉 B-TIER (10-49 points)
 
-The indicator includes pre-built alerts. To set them up:
+| | |
+|:--|:--|
+| **SL Position** | Just beyond body (BODY LOW for long, BODY HIGH for short) |
+| **Entry** | Candle close |
+| **Stop** | SL line |
+| **Action** | CLOSE QUICK |
 
-1. Click the "Alerts" button (clock icon) in TradingView
-2. Select "Get_rich_aggressively" as condition
-3. Choose from available alerts:
-   - **EXTREME LONG** - 4:1+ bullish setup
-   - **EXTREME SHORT** - 4:1+ bearish setup
-   - **HIGH CONV LONG** - 3:1 bullish setup
-   - **HIGH CONV SHORT** - 3:1 bearish setup
-   - **BULL TRAP** - Failed breakout, short opportunity
-   - **BEAR TRAP** - Failed breakdown, long opportunity
-   - **LONDON OPEN** - Session notification
-   - **NY OPEN** - Session notification
+**Management:**
+- Target 5-10 points MAX
+- Exit in 1-3 candles
+- DO NOT hold
+- Any doubt? → EXIT
 
----
-
-## 📚 Understanding the Logic
-
-### Volume Delta Calculation
-
-The indicator uses **intrabar analysis** to calculate precise volume delta:
-
-```
-For each lower-timeframe bar within the current bar:
-    Buy Pressure = ((Close - Low) / Range) × Volume
-    Sell Pressure = ((High - Close) / Range) × Volume
-    Delta = Buy Pressure - Sell Pressure
-
-Total Delta = Sum of all intrabar deltas
-```
-
-This method is more accurate than simple "green candle = buying" logic because it captures the **internal auction** within each candle.
-
-### Imbalance Ratio
-
-```
-Bullish Imbalance = Buy Pressure / Sell Pressure
-Bearish Imbalance = Sell Pressure / Buy Pressure
-
-If ratio ≥ 1.5 AND volume spike → Standard signal
-If ratio ≥ 2.0 AND big volume → High conviction signal
-```
-
-### Trap Detection
-
-```
-Bull Trap = 
-    Price breaks ABOVE swing high +
-    Closes BACK BELOW swing high +
-    Upper wick ≥ 40% of candle range +
-    Volume spike present
-
-Bear Trap = 
-    Price breaks BELOW swing low +
-    Closes BACK ABOVE swing low +
-    Lower wick ≥ 40% of candle range +
-    Volume spike present
-```
+> 💡 **Why tight SL:** Small move, small risk. Quick scalp and get out.
 
 ---
 
-## 💡 Pro Tips
+## ⚙️ SETTINGS BY INSTRUMENT
 
-1. **Combine with market structure** - Signals at key S/R levels are stronger
-2. **Watch CVD divergence** - If CVD trends opposite to price, reversal likely
-3. **Stack confluences** - Trap + Absorption + Session Open = highest probability
-4. **Scale in** - Enter 50% on signal, add on confirmation
-5. **Use session filter** - Enable "Only Signal During Key Sessions" for cleaner signals
-6. **Check higher timeframe** - Ensure signal aligns with HTF trend/bias
-
----
-
-## ⚠️ Disclaimer
-
-This indicator is a tool to assist your trading decisions, not a guarantee of profits. Past performance does not indicate future results. Always:
-
-- Use proper risk management (1-2% max per trade)
-- Paper trade before going live
-- Understand the instrument you're trading
-- Never risk more than you can afford to lose
+| Setting | NQ | YM | GC |
+|:--------|:--:|:--:|:--:|
+| **Timeframe** | 1-5 min | 1-5 min | 5-15 min |
+| **S-Tier** | 100 pts | 100 pts | 15 pts |
+| **A-Tier** | 50 pts | 50 pts | 8 pts |
+| **B-Tier** | 10 pts | 15 pts | 3 pts |
+| **Min Volume** | 1.3x | 1.3x | 1.5x |
+| **Delta %** | 55% | 55% | 58% |
+| **SL Buffer** | 2 ticks | 2 ticks | 3 ticks |
+| **Best Time** | 9:30-11:30 EST | 9:30-11:30 EST | 3-5AM & 8:30-10:30 EST |
 
 ---
 
-## 🔄 Version History
+## ⚠️ AVOIDING FAKE-OUTS
 
-**v1.0** - Initial release
-- Volume delta calculation with intrabar analysis
-- Imbalance detection and signals
-- Bull/Bear trap identification
-- Absorption candle detection
-- Session filtering (London/NY)
-- Real-time info panel
-- Comprehensive alert system
+Futures **WILL** try to shake you out. The SL system is designed to keep you in winning trades and out of losing ones.
+
+### 1. SL IS BASED ON STRUCTURE
+- Not arbitrary — based on actual candle OHLC
+- **Wick** = where price was rejected
+- **Body** = where price accepted value
+
+### 2. TIER DETERMINES SL WIDTH
+- Big move (S) = wide SL (wick)
+- Medium move (A) = medium SL (mid-wick)
+- Small move (B) = tight SL (body)
+
+### 3. IF SL HITS, IT MEANS:
+- The structure that gave the signal is broken
+- The move has failed
+- **GET OUT** — the signal was wrong
+
+### 4. DO NOT:
+- ❌ Move SL closer (you'll get stopped on noise)
+- ❌ Move SL further (you'll take bigger losses)
+- ❌ Ignore SL (you'll blow up)
 
 ---
 
-## 📬 Support
+## 💰 THE GOLDEN RULE
 
-If you have questions or suggestions, leave a comment below or send me a message.
-
-**Happy Trading! Let's Get Rich Aggressively! 🚀**
+> ### **LEAVE EVERY TRADE WITH MONEY**
+>
+> | Tier | Rule |
+> |:-----|:-----|
+> | B-Tier | Small win > Small loss |
+> | A-Tier | Trail to breakeven, lock in profit |
+> | S-Tier | Let it run, but use the SL |
+>
+> **SL hit** = Capital preserved = Trade tomorrow  
+> **Target hit** = Money made = Trade tomorrow
 
 ---
 
-*This indicator is inspired by Auction Market Theory, Order Flow concepts, and professional tools like DeepCharts, Sierra Chart, and Bookmap. It brings institutional-grade analysis to TradingView.*
+## 🔔 ALERTS
+
+| Alert | Description |
+|:------|:------------|
+| **S-TIER LONG/SHORT** | Hold longer, SL at wick |
+| **A-TIER LONG/SHORT** | Hold a bit, SL at mid-wick |
+| **B-TIER LONG/SHORT** | Close quick, SL at body |
+| **LONDON OPEN** | Session start |
+| **NY OPEN** | Session start |
+
+---
+
+## ⚠️ DISCLAIMER
+
+> Risk management is **YOUR** responsibility.  
+> Never risk more than 1-2% per trade.  
+> Paper trade first.
+
+---
+
+<div align="center">
+
+### Get Rich. Stay Rich. Trade Aggressively. 🚀
+
+</div>

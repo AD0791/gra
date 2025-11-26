@@ -1,30 +1,52 @@
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║          GET RICH AGGRESSIVELY v4 - QUICK REFERENCE CHEAT SHEET              ║
-║                    NQ • YM • GC  |  LEAVE WITH MONEY                         ║
+║              GET RICH AGGRESSIVELY v4 - CHEAT SHEET                          ║
+║                   NQ • YM • GC  |  LEAVE WITH MONEY                          ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│                           TIER SYSTEM - MEMORIZE THIS                        │
+│                              TIER SYSTEM                                     │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
-│    🥇 S-TIER │ 100+ pts │ GOLD badge   │ HOLD LONGER → Watch next candle    │
-│    🥈 A-TIER │ 50-99 pts│ GREEN badge  │ HOLD A BIT  → Trail to breakeven   │
-│    🥉 B-TIER │ 10-49 pts│ YELLOW badge │ CLOSE QUICK → Take profit NOW      │
-│    ❌ NO TIER│ <10 pts  │ No signal    │ NO TRADE    → Stay out             │
+│  🥇 S-TIER │ 100+ pts │ HOLD LONGER  │ SL @ WICK (widest)                   │
+│  🥈 A-TIER │ 50-99 pts│ HOLD A BIT   │ SL @ MID-WICK                        │
+│  🥉 B-TIER │ 10-49 pts│ CLOSE QUICK  │ SL @ BODY (tightest)                 │
+│  ❌ NO TIER│ <10 pts  │ NO TRADE     │ STAY OUT                              │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│                              SIGNAL ANATOMY                                  │
+│                       STOP LOSS PLACEMENT (OHLC)                             │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
-│    ▼ [S]  = SHORT Signal, S-Tier (above candle)                             │
-│    ─────  = Your STOP LOSS line (respect it!)                               │
+│  LONG TRADE:                        SHORT TRADE:                            │
 │                                                                              │
-│    [A] ▲  = LONG Signal, A-Tier (below candle)                              │
-│    ─────  = Your STOP LOSS line                                             │
+│      HIGH ─────                         HIGH ───── ← S-TIER SL              │
+│        │                                  │                                  │
+│        │ upper wick                       │ upper wick                       │
+│        │                               ───┼─── ← A-TIER SL                  │
+│  ═══ BODY HIGH ═══                        │                                  │
+│        │ body                        ═══ BODY HIGH ═══ ← B-TIER SL          │
+│  ═══ BODY LOW ═══ ← B-TIER SL             │ body                            │
+│        │                             ═══ BODY LOW ═══                       │
+│     ───┼─── ← A-TIER SL                   │                                  │
+│        │ lower wick                       │ lower wick                       │
+│      LOW ───── ← S-TIER SL              LOW ─────                            │
 │                                                                              │
-│    Arrow = Direction │ Badge = Tier │ Line = Stop Loss                      │
+│  S = Wide (room for big move)  │  B = Tight (quick scalp)                   │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                              SIGNAL VISUAL                                   │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│     ▼ [S]  = S-TIER SHORT (arrow + gold badge above candle)                 │
+│     ─────  = Stop Loss line at HIGH (S-tier = wick)                         │
+│                                                                              │
+│     [A] ▲  = A-TIER LONG (badge + arrow below candle)                       │
+│     ─────  = Stop Loss line at MID-WICK                                     │
+│                                                                              │
+│     SL LINE IS WHERE YOUR STOP GOES - RESPECT IT                            │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 
@@ -32,13 +54,40 @@
 │                           ENTRY CHECKLIST                                    │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
-│    □ Signal appears (Badge + Arrow + SL Line)                               │
-│    □ Info panel shows: Tier = S, A, or B (not X)                            │
-│    □ Info panel shows: Vol = GREEN (1.3x+ minimum)                          │
-│    □ Info panel shows: Dir = LONG or SHORT (not ---)                        │
-│    □ Info panel shows: Sess = LDN! or NY! (if filter on)                    │
-│    □ All boxes checked? → ENTER on candle close                             │
-│    □ Stop loss placed at SL line                                            │
+│  □ Signal appears (Badge + Arrow + SL Line)                                 │
+│  □ Tier = S, A, or B (not X)                                                │
+│  □ Vol = GREEN or YELLOW (not red)                                          │
+│  □ Dir = LONG or SHORT (not ---)                                            │
+│  □ Sess = LDN! or NY! (if filter on)                                        │
+│                                                                              │
+│  ALL CHECKED → Enter on candle close, SL at line                            │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                      POSITION MANAGEMENT BY TIER                             │
+├──────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  S-TIER:                                                                     │
+│    → SL at wick (wide)                                                      │
+│    → HOLD - watch next candle                                               │
+│    → Next candle continues? HOLD MORE                                       │
+│    → Next candle reverses? EXIT on close                                    │
+│    → Same tier same direction? ADD position                                 │
+│                                                                              │
+│  A-TIER:                                                                     │
+│    → SL at mid-wick (medium)                                                │
+│    → Target 1:1 R:R minimum                                                 │
+│    → If continues: trail SL to breakeven                                    │
+│    → If stalls: take profit                                                 │
+│    → If reverses: EXIT                                                      │
+│                                                                              │
+│  B-TIER:                                                                     │
+│    → SL at body (tight)                                                     │
+│    → Target 5-10 points MAX                                                 │
+│    → Exit in 1-3 candles                                                    │
+│    → NO holding - this is a scalp                                           │
+│    → Any doubt = EXIT                                                       │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 
@@ -47,119 +96,88 @@
 ├────────────────┬────────────────┬────────────────┬───────────────────────────┤
 │                │      NQ        │      YM        │         GC                │
 ├────────────────┼────────────────┼────────────────┼───────────────────────────┤
-│ Best TF        │ 1-5 min        │ 1-5 min        │ 5-15 min                  │
+│ Timeframe      │ 1-5 min        │ 1-5 min        │ 5-15 min                  │
 │ S-Tier         │ 100 pts        │ 100 pts        │ 15 pts                    │
 │ A-Tier         │ 50 pts         │ 50 pts         │ 8 pts                     │
 │ B-Tier         │ 10 pts         │ 15 pts         │ 3 pts                     │
 │ Min Vol        │ 1.3x           │ 1.3x           │ 1.5x                      │
-│ SL Buffer      │ 4 ticks        │ 5 ticks        │ 10 ticks                  │
-│ Best Time      │ 9:30-11:30 EST │ 9:30-11:30 EST │ 3-5 AM & 8:30-10:30 EST   │
+│ SL Buffer      │ 2 ticks        │ 2 ticks        │ 3 ticks                   │
+│ Best Time      │ 9:30-11:30 EST │ 9:30-11:30 EST │ 3-5AM + 8:30-10:30 EST    │
 └────────────────┴────────────────┴────────────────┴───────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│                        POSITION MANAGEMENT                                   │
+│                            INFO PANEL                                        │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
-│  S-TIER TRADE:                                                               │
-│    → Enter on close                                                          │
-│    → Stop at SL line (DO NOT MOVE)                                          │
-│    → Watch next candle closely                                               │
-│    → Next candle continues? HOLD                                            │
-│    → Next candle reverses? EXIT                                             │
-│    → Next candle S-tier same direction? ADD                                 │
-│                                                                              │
-│  A-TIER TRADE:                                                               │
-│    → Enter on close                                                          │
-│    → Stop at SL line                                                         │
-│    → Target: 1:1 R:R minimum                                                │
-│    → Trail stop to breakeven if continues                                   │
-│    → Any reversal sign? EXIT                                                │
-│                                                                              │
-│  B-TIER TRADE:                                                               │
-│    → Enter on close                                                          │
-│    → Stop at SL line                                                         │
-│    → Target: 5-10 points MAX                                                │
-│    → Exit in 1-3 candles                                                    │
-│    → DO NOT hold overnight                                                  │
+│  Pts   │ 87.5   ← Points moved                                              │
+│  Tier  │ A      ← S/A/B/X                                                   │
+│  Vol   │ 2.1x   ← GREEN=ok, RED=no trade                                    │
+│  Delta │ 62%B   ← Buyer/Seller dominance                                    │
+│  Dir   │ LONG   ← Confirmed direction                                       │
+│  Sess  │ NY!    ← Active session                                            │
+│  Sig   │ A▲     ← Current signal                                            │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│                            INFO PANEL DECODE                                 │
+│                         ⚠️ DO NOT TRADE ⚠️                                   │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
-│    Points │ 87.5    ← Candle moved 87.5 points                              │
-│    Tier   │ A       ← A-Tier classification                                 │
-│    Vol    │ 2.3x    ← Volume is 2.3x average (GREEN = good)                │
-│    Delta  │ 62% B   ← 62% buyers (confirms long)                            │
-│    Dir    │ LONG    ← Confirmed direction                                   │
-│    Sess   │ NY!     ← In NY session (yellow = active)                       │
-│    Signal │ A▲      ← Current signal: A-Tier Long                           │
-│                                                                              │
-│    Vol RED = Don't trade │ Dir --- = Don't trade │ Sess --- = Caution      │
+│  ✗ Vol = RED (below 1.3x)                                                   │
+│  ✗ Dir = --- (no confirmation)                                              │
+│  ✗ Tier = X (under min points)                                              │
+│  ✗ 12:00 - 2:00 PM EST (lunch)                                              │
+│  ✗ Before FOMC/NFP/CPI                                                      │
+│  ✗ You're not sure                                                          │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│                        KEY TIMES (ALL EST)                                   │
+│                          KEY TIMES (EST)                                     │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
-│    3:00 AM  │ London Open     │ GC active, sets daily bias                  │
-│    8:30 AM  │ Economic Data   │ GC/YM react, wait for dust to settle        │
-│    9:30 AM  │ NY Open         │ NQ/YM prime time - BEST SIGNALS             │
-│   11:30 AM  │ Morning ends    │ Momentum fades                               │
-│   12:00 PM  │ Lunch starts    │ STAY OUT - chop zone                        │
-│    2:00 PM  │ Afternoon       │ Can trade, lower quality                    │
-│    4:00 PM  │ Cash close      │ Volatility spike, be careful                │
+│  3:00 AM  │ London Open    │ GC moves                                       │
+│  8:30 AM  │ Economic Data  │ GC/YM react                                    │
+│  9:30 AM  │ NY Open        │ NQ/YM prime time ← BEST                        │
+│ 11:30 AM  │ Morning ends   │ Momentum fades                                 │
+│ 12:00 PM  │ Lunch          │ STAY OUT                                       │
+│  2:00 PM  │ Afternoon      │ Lower quality                                  │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│                         ⚠️ DO NOT TRADE WHEN ⚠️                              │
+│                         QUICK SIGNAL REFERENCE                               │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
-│    ✗ Vol shows RED (below 1.3x)                                             │
-│    ✗ Dir shows --- (no confirmation)                                        │
-│    ✗ Tier shows X (under 10 points)                                         │
-│    ✗ 12:00 - 2:00 PM EST (lunch chop)                                       │
-│    ✗ Before major news (FOMC, NFP, CPI)                                     │
-│    ✗ You're unsure = NO TRADE                                               │
+│  [S] ▲  =  S-LONG  │ SL @ LOW      │ HOLD LONGER                            │
+│  [S] ▼  =  S-SHORT │ SL @ HIGH     │ HOLD LONGER                            │
+│  [A] ▲  =  A-LONG  │ SL @ MID-WICK │ HOLD A BIT                             │
+│  [A] ▼  =  A-SHORT │ SL @ MID-WICK │ HOLD A BIT                             │
+│  [B] ▲  =  B-LONG  │ SL @ BODY LOW │ CLOSE QUICK                            │
+│  [B] ▼  =  B-SHORT │ SL @ BODY HI  │ CLOSE QUICK                            │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│                         THE GOLDEN RULES                                     │
+│                          THE GOLDEN RULES                                    │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
-│    1. SL LINE IS LAW → If price hits it, you're OUT. No exceptions.         │
+│  1. SL LINE IS LAW                                                          │
+│     → If price hits it = EXIT. No exceptions.                               │
+│     → DO NOT move it closer or further.                                     │
 │                                                                              │
-│    2. NO VOLUME = NO TRADE → Gray/red vol panel = stay flat                 │
+│  2. TIER = HOLD TIME                                                        │
+│     → S = Long hold │ A = Medium │ B = Quick                                │
 │                                                                              │
-│    3. TIER DICTATES HOLD TIME:                                              │
-│         S = Long │ A = Medium │ B = Quick                                   │
+│  3. NO VOLUME = NO TRADE                                                    │
+│     → Red vol panel = flat                                                  │
 │                                                                              │
-│    4. PROTECT PROFITS → Move stop to breakeven after 1:1                    │
-│                                                                              │
-│    5. LEAVE WITH MONEY → Even $10 profit beats a loss                       │
-│                                                                              │
-└──────────────────────────────────────────────────────────────────────────────┘
-
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                      QUICK SIGNAL REFERENCE                                  │
-├──────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│    [S] ▲  =  S-Tier LONG   →  Enter, hold, watch next candle               │
-│    [S] ▼  =  S-Tier SHORT  →  Enter, hold, watch next candle               │
-│    [A] ▲  =  A-Tier LONG   →  Enter, trail to BE, take profit              │
-│    [A] ▼  =  A-Tier SHORT  →  Enter, trail to BE, take profit              │
-│    [B] ▲  =  B-Tier LONG   →  Enter, scalp 5-10 pts, EXIT                  │
-│    [B] ▼  =  B-Tier SHORT  →  Enter, scalp 5-10 pts, EXIT                  │
-│                                                                              │
-│    No signal = No trade. Simple.                                            │
+│  4. LEAVE WITH MONEY                                                        │
+│     → Even $10 profit > $0 > any loss                                       │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 
 ══════════════════════════════════════════════════════════════════════════════
                         🚀 GET RICH AGGRESSIVELY 🚀
-                    Leave Every Position With Money
+                   Leave Every Position With Money
 ══════════════════════════════════════════════════════════════════════════════

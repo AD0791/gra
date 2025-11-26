@@ -1,340 +1,345 @@
 // This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0
 // © Alexandro Disla - Get Rich Aggressively v4
-// Precision Futures Scalping System for NQ, YM, GC
+// Precision Futures Scalping | NQ • YM • GC
 
 //@version=6
 indicator("Get_rich_aggressively", shorttitle="GRA", overlay=true, max_labels_count=500, max_lines_count=500)
 
 // ══════════════════════════════════════════════════════════════════════════════
-// ████████████████████████  INSTRUMENT DETECTION  ██████████████████████████████
+// ████████████████████████  INSTRUMENT DETECTION  ██████████████████████════════
 // ══════════════════════════════════════════════════════════════════════════════
 
-// Auto-detect instrument and set tick/point values
-var float ticksPerPoint = 4.0      // Default NQ
-var float tickValue = 0.25         // Default NQ
+var float ticksPerPoint = 4.0
+var float tickValue = 0.25
 var string instrumentType = "NQ"
 
-// Detect instrument from symbol
-if str.contains(syminfo.ticker, "NQ") or str.contains(syminfo.ticker, "MNQ")
+if str.contains(str.upper(syminfo.ticker), "NQ") or str.contains(str.upper(syminfo.ticker), "MNQ")
     ticksPerPoint := 4.0
     tickValue := 0.25
     instrumentType := "NQ"
-else if str.contains(syminfo.ticker, "YM") or str.contains(syminfo.ticker, "MYM")
+else if str.contains(str.upper(syminfo.ticker), "YM") or str.contains(str.upper(syminfo.ticker), "MYM")
     ticksPerPoint := 1.0
     tickValue := 1.0
     instrumentType := "YM"
-else if str.contains(syminfo.ticker, "GC") or str.contains(syminfo.ticker, "MGC")
+else if str.contains(str.upper(syminfo.ticker), "GC") or str.contains(str.upper(syminfo.ticker), "MGC")
     ticksPerPoint := 10.0
     tickValue := 0.10
     instrumentType := "GC"
-else if str.contains(syminfo.ticker, "ES") or str.contains(syminfo.ticker, "MES")
+else if str.contains(str.upper(syminfo.ticker), "ES") or str.contains(str.upper(syminfo.ticker), "MES")
     ticksPerPoint := 4.0
     tickValue := 0.25
     instrumentType := "ES"
 
 // ══════════════════════════════════════════════════════════════════════════════
-// ████████████████████████████  CONFIGURATION  █████████████████████████████████
+// ████████████████████████████  CONFIGURATION  █████████████████════════════════
 // ══════════════════════════════════════════════════════════════════════════════
 
 string GRP_TIER = "═══════════ TIER THRESHOLDS ═══════════"
-float sTierPoints = input.float(100.0, "S-Tier (Points)", minval=50, maxval=500, step=10, group=GRP_TIER,
-     tooltip="Hold position longer, watch next candle")
-float aTierPoints = input.float(50.0, "A-Tier (Points)", minval=20, maxval=100, step=5, group=GRP_TIER,
-     tooltip="Hold a bit longer")
-float bTierPoints = input.float(10.0, "B-Tier (Points)", minval=5, maxval=50, step=1, group=GRP_TIER,
-     tooltip="Close position quick")
+float sTierPoints = input.float(100.0, "S-Tier (Points)", minval=10, maxval=500, step=10, group=GRP_TIER,
+     tooltip="100+ pts: HOLD LONGER - Watch next candle")
+float aTierPoints = input.float(50.0, "A-Tier (Points)", minval=5, maxval=100, step=5, group=GRP_TIER,
+     tooltip="50-99 pts: HOLD A BIT - Trail to breakeven")
+float bTierPoints = input.float(10.0, "B-Tier (Points)", minval=1, maxval=50, step=1, group=GRP_TIER,
+     tooltip="10-49 pts: CLOSE QUICK - Take profit NOW")
 
 string GRP_VOLUME = "═══════════ VOLUME FILTER ═══════════"
 int volMaLength = input.int(20, "Volume MA Length", minval=5, maxval=50, group=GRP_VOLUME)
-float minVolRatio = input.float(1.3, "Min Volume Ratio to Signal", minval=1.0, maxval=3.0, step=0.1, group=GRP_VOLUME,
-     tooltip="No signal without this volume multiple")
-float strongVolRatio = input.float(2.0, "Strong Volume Ratio", minval=1.5, maxval=5.0, step=0.1, group=GRP_VOLUME)
+float minVolRatio = input.float(1.3, "Min Volume to Signal", minval=1.0, maxval=3.0, step=0.1, group=GRP_VOLUME,
+     tooltip="No signal if volume below this multiple")
+float strongVolRatio = input.float(2.0, "Strong Volume", minval=1.5, maxval=5.0, step=0.1, group=GRP_VOLUME)
 
-string GRP_DELTA = "═══════════ DELTA SENSITIVITY ═══════════"
-float deltaThreshold = input.float(0.55, "Delta Dominance Threshold", minval=0.51, maxval=0.75, step=0.01, group=GRP_DELTA,
-     tooltip="Buy pressure must exceed this % to confirm direction")
-string analysisTimeframe = input.timeframe("1", "Intrabar Analysis TF", group=GRP_DELTA)
+string GRP_DELTA = "═══════════ DELTA FILTER ═══════════"
+float deltaThreshold = input.float(0.55, "Delta Dominance %", minval=0.51, maxval=0.75, step=0.01, group=GRP_DELTA,
+     tooltip="55% = buyers/sellers must control 55%+ of volume")
+string analysisTimeframe = input.timeframe("1", "Intrabar TF", group=GRP_DELTA)
 
-string GRP_SESSION = "═══════════ SESSION FILTER ═══════════"
-bool onlyKeySession = input.bool(true, "Only Signal During Key Sessions", group=GRP_SESSION)
+string GRP_SESSION = "═══════════ SESSION ═══════════"
+bool onlyKeySession = input.bool(true, "Only Signal in Key Sessions", group=GRP_SESSION)
 string sessionTimezone = input.string("America/New_York", "Timezone", 
      options=["America/New_York", "America/Chicago", "Europe/London", "UTC"], group=GRP_SESSION)
-string londonWindow = input.string("0300-0500", "London Open Window", group=GRP_SESSION)
-string nyWindow = input.string("0930-1130", "NY Open Window", group=GRP_SESSION)
+string londonWindow = input.string("0300-0500", "London Window", group=GRP_SESSION)
+string nyWindow = input.string("0930-1130", "NY Window", group=GRP_SESSION)
 
-string GRP_SL = "═══════════ TRAILING STOP ═══════════"
-float slBufferTicks = input.float(4.0, "SL Buffer (Ticks)", minval=1, maxval=20, step=1, group=GRP_SL,
-     tooltip="Ticks beyond candle wick for stop loss")
-bool showTrailingSL = input.bool(true, "Show Trailing SL Lines", group=GRP_SL)
-int slLineLength = input.int(5, "SL Line Length (Bars)", minval=2, maxval=20, group=GRP_SL)
+string GRP_SL = "═══════════ STOP LOSS ═══════════"
+float slBufferTicks = input.float(2.0, "SL Buffer (Ticks)", minval=0, maxval=10, step=1, group=GRP_SL,
+     tooltip="Extra buffer beyond calculated SL level")
+bool showSL = input.bool(true, "Show SL Lines", group=GRP_SL)
+int slLineLength = input.int(8, "SL Line Length", minval=3, maxval=20, group=GRP_SL)
 
-string GRP_VISUAL = "═══════════ VISUALS ═══════════"
-color sTierColor = input.color(color.new(#FFD700, 0), "S-Tier Color (Gold)", group=GRP_VISUAL)
-color aTierColor = input.color(color.new(#00E676, 0), "A-Tier Color (Green)", group=GRP_VISUAL)
-color bTierColor = input.color(color.new(#FFC107, 0), "B-Tier Color (Yellow)", group=GRP_VISUAL)
-color longColor = input.color(color.new(#00E676, 0), "Long Arrow Color", group=GRP_VISUAL)
-color shortColor = input.color(color.new(#FF5252, 0), "Short Arrow Color", group=GRP_VISUAL)
-color slColor = input.color(color.new(#FF5252, 50), "Stop Loss Line Color", group=GRP_VISUAL)
+string GRP_VISUAL = "═══════════ COLORS ═══════════"
+color sTierColor = input.color(color.new(#FFD700, 0), "S-Tier (Gold)", group=GRP_VISUAL)
+color aTierColor = input.color(color.new(#00E676, 0), "A-Tier (Green)", group=GRP_VISUAL)
+color bTierColor = input.color(color.new(#FFC107, 0), "B-Tier (Yellow)", group=GRP_VISUAL)
+color longColor = input.color(color.new(#00E676, 0), "Long", group=GRP_VISUAL)
+color shortColor = input.color(color.new(#FF5252, 0), "Short", group=GRP_VISUAL)
+color slColor = input.color(color.new(#FF5252, 30), "SL Line", group=GRP_VISUAL)
 
 // ══════════════════════════════════════════════════════════════════════════════
-// ██████████████████████████  CORE CALCULATIONS  ███████████████████████████████
+// ██████████████████████████  OHLC STRUCTURE  ██████████════════════════════════
 // ══════════════════════════════════════════════════════════════════════════════
 
-// ─────────────────────────── Candle Metrics ───────────────────────────────────
+// Candle anatomy
+float bodyHigh = math.max(open, close)
+float bodyLow = math.min(open, close)
+float bodySize = bodyHigh - bodyLow
+float upperWick = high - bodyHigh
+float lowerWick = bodyLow - low
 float candleRange = high - low
-float bodySize = math.abs(close - open)
+
+// Point calculation
 float candlePoints = candleRange / tickValue / ticksPerPoint
-bool isBullishCandle = close > open
-bool isBearishCandle = close < open
 
-// ─────────────────────────── Tier Classification ──────────────────────────────
-string currentTier = candlePoints >= sTierPoints ? "S" : candlePoints >= aTierPoints ? "A" : candlePoints >= bTierPoints ? "B" : "X"
-bool isTierCandle = currentTier != "X"
+// Candle direction
+bool isBullish = close > open
+bool isBearish = close < open
 
-// ─────────────────────────── Volume Analysis ──────────────────────────────────
-float avgVolume = ta.sma(volume, volMaLength)
-float volumeRatio = avgVolume > 0 ? volume / avgVolume : 1.0
-bool hasMinVolume = volumeRatio >= minVolRatio
-bool hasStrongVolume = volumeRatio >= strongVolRatio
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████████  TIER CLASSIFICATION  ███████████════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
 
-// ─────────────────────────── Volume Delta (Intrabar) ──────────────────────────
-var float intrabarBuyVol = 0.0
-var float intrabarSellVol = 0.0
-var float volumeDelta = 0.0
+string tier = candlePoints >= sTierPoints ? "S" : candlePoints >= aTierPoints ? "A" : candlePoints >= bTierPoints ? "B" : "X"
+bool isTiered = tier != "X"
+
+bool isTierS = tier == "S"
+bool isTierA = tier == "A"
+bool isTierB = tier == "B"
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ██████████████████████████  VOLUME ANALYSIS  █████████════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+
+float avgVol = ta.sma(volume, volMaLength)
+float volRatio = avgVol > 0 ? volume / avgVol : 1.0
+bool hasVolume = volRatio >= minVolRatio
+bool strongVol = volRatio >= strongVolRatio
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████████  VOLUME DELTA ANALYSIS  █████████════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+
+var float buyVol = 0.0
+var float sellVol = 0.0
 
 if timeframe.isintraday
     [ltfO, ltfC, ltfV, ltfH, ltfL] = request.security_lower_tf(syminfo.tickerid, analysisTimeframe, [open, close, volume, high, low])
     
     if array.size(ltfC) > 0
-        float tempBuy = 0.0
-        float tempSell = 0.0
+        float tBuy = 0.0
+        float tSell = 0.0
         
         for i = 0 to array.size(ltfC) - 1
-            float ltfRange = array.get(ltfH, i) - array.get(ltfL, i)
-            float ltfClose = array.get(ltfC, i)
-            float ltfOpen = array.get(ltfO, i)
-            float ltfVol = array.get(ltfV, i)
+            float r = array.get(ltfH, i) - array.get(ltfL, i)
+            float c = array.get(ltfC, i)
+            float o = array.get(ltfO, i)
+            float v = array.get(ltfV, i)
             
-            if ltfRange > 0
-                tempBuy += ((ltfClose - array.get(ltfL, i)) / ltfRange) * ltfVol
-                tempSell += ((array.get(ltfH, i) - ltfClose) / ltfRange) * ltfVol
+            if r > 0
+                tBuy += ((c - array.get(ltfL, i)) / r) * v
+                tSell += ((array.get(ltfH, i) - c) / r) * v
             else
-                if ltfClose >= ltfOpen
-                    tempBuy += ltfVol
+                if c >= o
+                    tBuy += v
                 else
-                    tempSell += ltfVol
+                    tSell += v
         
-        intrabarBuyVol := tempBuy
-        intrabarSellVol := tempSell
-        volumeDelta := tempBuy - tempSell
+        buyVol := tBuy
+        sellVol := tSell
     else
-        float buyP = candleRange > 0 ? ((close - low) / candleRange) * volume : volume * 0.5
-        float sellP = candleRange > 0 ? ((high - close) / candleRange) * volume : volume * 0.5
-        intrabarBuyVol := buyP
-        intrabarSellVol := sellP
-        volumeDelta := buyP - sellP
+        buyVol := candleRange > 0 ? ((close - low) / candleRange) * volume : volume * 0.5
+        sellVol := candleRange > 0 ? ((high - close) / candleRange) * volume : volume * 0.5
 else
-    float buyP = candleRange > 0 ? ((close - low) / candleRange) * volume : volume * 0.5
-    float sellP = candleRange > 0 ? ((high - close) / candleRange) * volume : volume * 0.5
-    intrabarBuyVol := buyP
-    intrabarSellVol := sellP
-    volumeDelta := buyP - sellP
+    buyVol := candleRange > 0 ? ((close - low) / candleRange) * volume : volume * 0.5
+    sellVol := candleRange > 0 ? ((high - close) / candleRange) * volume : volume * 0.5
 
-// Delta dominance calculation
-float totalVol = intrabarBuyVol + intrabarSellVol
-float buyDominance = totalVol > 0 ? intrabarBuyVol / totalVol : 0.5
-float sellDominance = totalVol > 0 ? intrabarSellVol / totalVol : 0.5
+float totalVol = buyVol + sellVol
+float buyPct = totalVol > 0 ? buyVol / totalVol : 0.5
+float sellPct = totalVol > 0 ? sellVol / totalVol : 0.5
 
-// Direction confirmation (combine candle + delta)
-bool deltaConfirmsBull = buyDominance >= deltaThreshold
-bool deltaConfirmsBear = sellDominance >= deltaThreshold
-bool confirmedLong = isBullishCandle and deltaConfirmsBull
-bool confirmedShort = isBearishCandle and deltaConfirmsBear
+bool buyDominant = buyPct >= deltaThreshold
+bool sellDominant = sellPct >= deltaThreshold
+
+// Direction confirmation: candle + delta must agree
+bool confirmedLong = isBullish and buyDominant
+bool confirmedShort = isBearish and sellDominant
 
 // ══════════════════════════════════════════════════════════════════════════════
-// ████████████████████████████  SESSION FILTER  ████████████████████████████████
+// ████████████████████████████  SESSION FILTER  ████████████████████════════════
 // ══════════════════════════════════════════════════════════════════════════════
 
-bool inLondonOpen = not na(time(timeframe.period, londonWindow, sessionTimezone))
-bool inNYOpen = not na(time(timeframe.period, nyWindow, sessionTimezone))
-bool inKeySession = inLondonOpen or inNYOpen
-bool sessionAllows = onlyKeySession ? inKeySession : true
+bool inLondon = not na(time(timeframe.period, londonWindow, sessionTimezone))
+bool inNY = not na(time(timeframe.period, nyWindow, sessionTimezone))
+bool inSession = inLondon or inNY
+bool sessionOK = onlyKeySession ? inSession : true
 
-// Session start detection
-bool londonStart = na(time(timeframe.period, londonWindow, sessionTimezone)[1]) and inLondonOpen and timeframe.isintraday
-bool nyStart = na(time(timeframe.period, nyWindow, sessionTimezone)[1]) and inNYOpen and timeframe.isintraday
+// Session markers
+bool londonStart = na(time(timeframe.period, londonWindow, sessionTimezone)[1]) and inLondon and timeframe.isintraday
+bool nyStart = na(time(timeframe.period, nyWindow, sessionTimezone)[1]) and inNY and timeframe.isintraday
 
 // ══════════════════════════════════════════════════════════════════════════════
-// █████████████████████████████  SIGNAL LOGIC  █████████████████████████████════
+// █████████████████████  STOP LOSS CALCULATION (OHLC-BASED)  ███████════════════
 // ══════════════════════════════════════════════════════════════════════════════
 
-// Final signal conditions
-bool longSignal = isTierCandle and hasMinVolume and confirmedLong and sessionAllows
-bool shortSignal = isTierCandle and hasMinVolume and confirmedShort and sessionAllows
+// SL Buffer in price
+float buffer = slBufferTicks * tickValue
+
+// LONG STOP LOSS - positioned based on candle structure and tier
+// S-Tier: SL at candle low (widest - expecting big continuation)
+// A-Tier: SL at midpoint between body low and candle low
+// B-Tier: SL just below body low (tightest - quick scalp)
+
+float longSL_S = low - buffer                                    // At wick low
+float longSL_A = bodyLow - (lowerWick * 0.5) - buffer           // Midpoint of lower wick
+float longSL_B = bodyLow - buffer                                // Just below body
+
+// SHORT STOP LOSS - positioned based on candle structure and tier
+// S-Tier: SL at candle high (widest)
+// A-Tier: SL at midpoint between body high and candle high
+// B-Tier: SL just above body high (tightest)
+
+float shortSL_S = high + buffer                                  // At wick high
+float shortSL_A = bodyHigh + (upperWick * 0.5) + buffer         // Midpoint of upper wick
+float shortSL_B = bodyHigh + buffer                              // Just above body
+
+// Select appropriate SL based on tier and direction
+float longSL = isTierS ? longSL_S : isTierA ? longSL_A : longSL_B
+float shortSL = isTierS ? shortSL_S : isTierA ? shortSL_A : shortSL_B
+
+// ══════════════════════════════════════════════════════════════════════════════
+// █████████████████████████████  SIGNAL LOGIC  █████════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+
+// All conditions must be true for a signal
+bool longSignal = isTiered and hasVolume and confirmedLong and sessionOK
+bool shortSignal = isTiered and hasVolume and confirmedShort and sessionOK
 
 // Tier-specific signals
-bool sTierLong = longSignal and currentTier == "S"
-bool aTierLong = longSignal and currentTier == "A"
-bool bTierLong = longSignal and currentTier == "B"
+bool sLong = longSignal and isTierS
+bool aLong = longSignal and isTierA
+bool bLong = longSignal and isTierB
 
-bool sTierShort = shortSignal and currentTier == "S"
-bool aTierShort = shortSignal and currentTier == "A"
-bool bTierShort = shortSignal and currentTier == "B"
-
-// ══════════════════════════════════════════════════════════════════════════════
-// ███████████████████████  TRAILING STOP CALCULATION  ██████████████████████████
-// ══════════════════════════════════════════════════════════════════════════════
-
-float slBuffer = slBufferTicks * tickValue
-float longSL = low - slBuffer
-float shortSL = high + slBuffer
+bool sShort = shortSignal and isTierS
+bool aShort = shortSignal and isTierA
+bool bShort = shortSignal and isTierB
 
 // ══════════════════════════════════════════════════════════════════════════════
-// █████████████████████████████  VISUALIZATION  ████████████████████████████████
+// █████████████████████████████  VISUALIZATION  ████████════════════════════════
 // ══════════════════════════════════════════════════════════════════════════════
 
-// ─────────────────────────── Tier Badge Color ─────────────────────────────────
-color tierColor = currentTier == "S" ? sTierColor : currentTier == "A" ? aTierColor : currentTier == "B" ? bTierColor : na
+// Tier color selection
+color tierCol = isTierS ? sTierColor : isTierA ? aTierColor : isTierB ? bTierColor : na
 
-// ─────────────────────────── LONG SIGNALS ─────────────────────────────────────
+// ─────────────────────── LONG SIGNALS (Below candle) ──────────────────────────
 // S-Tier Long
-plotshape(sTierLong, "S-Tier Long Badge", style=shape.square, location=location.belowbar, 
-     color=sTierColor, size=size.tiny, text="S", textcolor=color.black)
-plotshape(sTierLong, "S-Tier Long Arrow", style=shape.triangleup, location=location.belowbar, 
-     color=longColor, size=size.tiny, offset=0)
+plotshape(sLong, "S Long Arrow", shape.triangleup, location.belowbar, longColor, size=size.tiny)
+plotshape(sLong, "S Long Badge", shape.square, location.belowbar, sTierColor, size=size.tiny, text="S", textcolor=color.black, offset=0)
 
 // A-Tier Long
-plotshape(aTierLong, "A-Tier Long Badge", style=shape.square, location=location.belowbar, 
-     color=aTierColor, size=size.tiny, text="A", textcolor=color.black)
-plotshape(aTierLong, "A-Tier Long Arrow", style=shape.triangleup, location=location.belowbar, 
-     color=longColor, size=size.tiny, offset=0)
+plotshape(aLong, "A Long Arrow", shape.triangleup, location.belowbar, longColor, size=size.tiny)
+plotshape(aLong, "A Long Badge", shape.square, location.belowbar, aTierColor, size=size.tiny, text="A", textcolor=color.black, offset=0)
 
 // B-Tier Long
-plotshape(bTierLong, "B-Tier Long Badge", style=shape.square, location=location.belowbar, 
-     color=bTierColor, size=size.tiny, text="B", textcolor=color.black)
-plotshape(bTierLong, "B-Tier Long Arrow", style=shape.triangleup, location=location.belowbar, 
-     color=longColor, size=size.tiny, offset=0)
+plotshape(bLong, "B Long Arrow", shape.triangleup, location.belowbar, longColor, size=size.tiny)
+plotshape(bLong, "B Long Badge", shape.square, location.belowbar, bTierColor, size=size.tiny, text="B", textcolor=color.black, offset=0)
 
-// ─────────────────────────── SHORT SIGNALS ────────────────────────────────────
+// ─────────────────────── SHORT SIGNALS (Above candle) ─────────────────────────
 // S-Tier Short
-plotshape(sTierShort, "S-Tier Short Badge", style=shape.square, location=location.abovebar, 
-     color=sTierColor, size=size.tiny, text="S", textcolor=color.black)
-plotshape(sTierShort, "S-Tier Short Arrow", style=shape.triangledown, location=location.abovebar, 
-     color=shortColor, size=size.tiny, offset=0)
+plotshape(sShort, "S Short Arrow", shape.triangledown, location.abovebar, shortColor, size=size.tiny)
+plotshape(sShort, "S Short Badge", shape.square, location.abovebar, sTierColor, size=size.tiny, text="S", textcolor=color.black, offset=0)
 
 // A-Tier Short
-plotshape(aTierShort, "A-Tier Short Badge", style=shape.square, location=location.abovebar, 
-     color=aTierColor, size=size.tiny, text="A", textcolor=color.black)
-plotshape(aTierShort, "A-Tier Short Arrow", style=shape.triangledown, location=location.abovebar, 
-     color=shortColor, size=size.tiny, offset=0)
+plotshape(aShort, "A Short Arrow", shape.triangledown, location.abovebar, shortColor, size=size.tiny)
+plotshape(aShort, "A Short Badge", shape.square, location.abovebar, aTierColor, size=size.tiny, text="A", textcolor=color.black, offset=0)
 
 // B-Tier Short
-plotshape(bTierShort, "B-Tier Short Badge", style=shape.square, location=location.abovebar, 
-     color=bTierColor, size=size.tiny, text="B", textcolor=color.black)
-plotshape(bTierShort, "B-Tier Short Arrow", style=shape.triangledown, location=location.abovebar, 
-     color=shortColor, size=size.tiny, offset=0)
+plotshape(bShort, "B Short Arrow", shape.triangledown, location.abovebar, shortColor, size=size.tiny)
+plotshape(bShort, "B Short Badge", shape.square, location.abovebar, bTierColor, size=size.tiny, text="B", textcolor=color.black, offset=0)
 
-// ─────────────────────────── TRAILING STOP LINES ──────────────────────────────
-if showTrailingSL and longSignal
-    line.new(bar_index, longSL, bar_index + slLineLength, longSL, 
-         color=slColor, width=2, style=line.style_solid)
-    label.new(bar_index + slLineLength, longSL, text="SL", 
-         style=label.style_label_left, color=color.new(slColor, 50), textcolor=color.white, size=size.tiny)
+// ─────────────────────── STOP LOSS LINES ──────────────────────────────────────
+// Long SL Lines - drawn AT the calculated SL level WITHIN candle structure
+if showSL and longSignal
+    line.new(bar_index, longSL, bar_index + slLineLength, longSL, color=slColor, width=2, style=line.style_solid)
 
-if showTrailingSL and shortSignal
-    line.new(bar_index, shortSL, bar_index + slLineLength, shortSL, 
-         color=slColor, width=2, style=line.style_solid)
-    label.new(bar_index + slLineLength, shortSL, text="SL", 
-         style=label.style_label_left, color=color.new(slColor, 50), textcolor=color.white, size=size.tiny)
+// Short SL Lines
+if showSL and shortSignal
+    line.new(bar_index, shortSL, bar_index + slLineLength, shortSL, color=slColor, width=2, style=line.style_solid)
 
-// ─────────────────────────── SESSION MARKERS ──────────────────────────────────
-plotshape(londonStart, "London Open", shape.diamond, location.abovebar, 
-     color.new(#2196F3, 0), size=size.tiny, text="L", textcolor=color.white)
-plotshape(nyStart, "NY Open", shape.diamond, location.abovebar, 
-     color.new(#4CAF50, 0), size=size.tiny, text="N", textcolor=color.white)
+// ─────────────────────── SESSION MARKERS ──────────────────────────────────────
+plotshape(londonStart, "LDN", shape.diamond, location.abovebar, color.new(#2196F3, 0), size=size.tiny, text="L", textcolor=color.white)
+plotshape(nyStart, "NY", shape.diamond, location.abovebar, color.new(#4CAF50, 0), size=size.tiny, text="N", textcolor=color.white)
 
-// Session background (subtle)
-bgcolor(inLondonOpen ? color.new(#2196F3, 95) : na, title="London Window")
-bgcolor(inNYOpen ? color.new(#4CAF50, 95) : na, title="NY Window")
+// Session background
+bgcolor(inLondon ? color.new(#2196F3, 96) : na, title="London BG")
+bgcolor(inNY ? color.new(#4CAF50, 96) : na, title="NY BG")
 
 // ══════════════════════════════════════════════════════════════════════════════
-// ████████████████████████████  INFO PANEL  ████████████████████████████████████
+// ████████████████████████████  INFO PANEL  ████████████████████████════════════
 // ══════════════════════════════════════════════════════════════════════════════
 
-var table infoPanel = table.new(position.top_right, 2, 8, bgcolor=color.new(color.black, 85), border_width=1, border_color=color.new(color.gray, 60))
+var table panel = table.new(position.top_right, 2, 8, bgcolor=color.new(color.black, 85), border_width=1, border_color=color.new(color.gray, 60))
 
 if barstate.islast
     // Header
-    table.cell(infoPanel, 0, 0, "GRA v4", text_color=color.white, text_size=size.small, bgcolor=color.new(#FFD700, 70))
-    table.cell(infoPanel, 1, 0, instrumentType, text_color=color.white, text_size=size.small, bgcolor=color.new(#FFD700, 70))
+    table.cell(panel, 0, 0, "GRA", text_color=color.white, text_size=size.small, bgcolor=color.new(#FFD700, 70))
+    table.cell(panel, 1, 0, instrumentType, text_color=color.white, text_size=size.small, bgcolor=color.new(#FFD700, 70))
     
     // Points
-    table.cell(infoPanel, 0, 1, "Points", text_color=color.gray, text_size=size.tiny)
-    string ptsStr = str.tostring(candlePoints, "#.#")
-    color ptsColor = currentTier == "S" ? sTierColor : currentTier == "A" ? aTierColor : currentTier == "B" ? bTierColor : color.gray
-    table.cell(infoPanel, 1, 1, ptsStr, text_color=ptsColor, text_size=size.tiny)
+    table.cell(panel, 0, 1, "Pts", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 1, 1, str.tostring(candlePoints, "#.#"), text_color=tierCol, text_size=size.tiny)
     
     // Tier
-    table.cell(infoPanel, 0, 2, "Tier", text_color=color.gray, text_size=size.tiny)
-    table.cell(infoPanel, 1, 2, currentTier, text_color=tierColor, text_size=size.tiny)
+    table.cell(panel, 0, 2, "Tier", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 1, 2, tier, text_color=tierCol, text_size=size.tiny)
     
     // Volume
-    table.cell(infoPanel, 0, 3, "Vol", text_color=color.gray, text_size=size.tiny)
-    string volStr = str.tostring(volumeRatio, "#.#") + "x"
-    color volColor = hasStrongVolume ? color.yellow : hasMinVolume ? color.green : color.red
-    table.cell(infoPanel, 1, 3, volStr, text_color=volColor, text_size=size.tiny)
+    table.cell(panel, 0, 3, "Vol", text_color=color.gray, text_size=size.tiny)
+    color vCol = strongVol ? color.yellow : hasVolume ? color.green : color.red
+    table.cell(panel, 1, 3, str.tostring(volRatio, "#.#") + "x", text_color=vCol, text_size=size.tiny)
     
     // Delta
-    table.cell(infoPanel, 0, 4, "Delta", text_color=color.gray, text_size=size.tiny)
-    string deltaStr = buyDominance > sellDominance ? str.tostring(buyDominance * 100, "#") + "% B" : str.tostring(sellDominance * 100, "#") + "% S"
-    color deltaColor = deltaConfirmsBull ? longColor : deltaConfirmsBear ? shortColor : color.gray
-    table.cell(infoPanel, 1, 4, deltaStr, text_color=deltaColor, text_size=size.tiny)
+    string dStr = buyPct > sellPct ? str.tostring(buyPct * 100, "#") + "%B" : str.tostring(sellPct * 100, "#") + "%S"
+    color dCol = buyDominant ? longColor : sellDominant ? shortColor : color.gray
+    table.cell(panel, 0, 4, "Delta", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 1, 4, dStr, text_color=dCol, text_size=size.tiny)
     
     // Direction
-    table.cell(infoPanel, 0, 5, "Dir", text_color=color.gray, text_size=size.tiny)
     string dirStr = confirmedLong ? "LONG" : confirmedShort ? "SHORT" : "---"
-    color dirColor = confirmedLong ? longColor : confirmedShort ? shortColor : color.gray
-    table.cell(infoPanel, 1, 5, dirStr, text_color=dirColor, text_size=size.tiny)
+    color dirCol = confirmedLong ? longColor : confirmedShort ? shortColor : color.gray
+    table.cell(panel, 0, 5, "Dir", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 1, 5, dirStr, text_color=dirCol, text_size=size.tiny)
     
     // Session
-    table.cell(infoPanel, 0, 6, "Sess", text_color=color.gray, text_size=size.tiny)
-    string sessStr = inNYOpen ? "NY!" : inLondonOpen ? "LDN!" : "---"
-    color sessColor = inKeySession ? color.yellow : color.gray
-    table.cell(infoPanel, 1, 6, sessStr, text_color=sessColor, text_size=size.tiny)
+    string sStr = inNY ? "NY!" : inLondon ? "LDN!" : "---"
+    table.cell(panel, 0, 6, "Sess", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 1, 6, sStr, text_color=inSession ? color.yellow : color.gray, text_size=size.tiny)
     
-    // Signal
-    table.cell(infoPanel, 0, 7, "Signal", text_color=color.gray, text_size=size.tiny)
-    string sigStr = sTierLong ? "S▲" : aTierLong ? "A▲" : bTierLong ? "B▲" : sTierShort ? "S▼" : aTierShort ? "A▼" : bTierShort ? "B▼" : "---"
-    color sigColor = longSignal ? longColor : shortSignal ? shortColor : color.gray
-    table.cell(infoPanel, 1, 7, sigStr, text_color=sigColor, text_size=size.tiny)
+    // Signal + SL
+    string sigStr = sLong ? "S▲" : aLong ? "A▲" : bLong ? "B▲" : sShort ? "S▼" : aShort ? "A▼" : bShort ? "B▼" : "---"
+    color sigCol = longSignal ? longColor : shortSignal ? shortColor : color.gray
+    table.cell(panel, 0, 7, "Sig", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 1, 7, sigStr, text_color=sigCol, text_size=size.tiny)
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ██████████████████████████████  ALERTS  ══════════════════════════════════════
 // ══════════════════════════════════════════════════════════════════════════════
 
-// S-Tier Alerts (Hold longer)
-alertcondition(sTierLong, title="S-TIER LONG", message="🥇 S-TIER LONG on {{ticker}} at {{close}} | {{volume}} vol | HOLD - Watch next candle!")
-alertcondition(sTierShort, title="S-TIER SHORT", message="🥇 S-TIER SHORT on {{ticker}} at {{close}} | {{volume}} vol | HOLD - Watch next candle!")
+alertcondition(sLong, title="S-TIER LONG", message="🥇 S-TIER LONG {{ticker}} @ {{close}} | SL: WICK LOW | HOLD LONGER")
+alertcondition(aLong, title="A-TIER LONG", message="🥈 A-TIER LONG {{ticker}} @ {{close}} | SL: MID WICK | HOLD A BIT")
+alertcondition(bLong, title="B-TIER LONG", message="🥉 B-TIER LONG {{ticker}} @ {{close}} | SL: BODY LOW | CLOSE QUICK")
 
-// A-Tier Alerts (Hold a bit)
-alertcondition(aTierLong, title="A-TIER LONG", message="🥈 A-TIER LONG on {{ticker}} at {{close}} | Hold a bit longer")
-alertcondition(aTierShort, title="A-TIER SHORT", message="🥈 A-TIER SHORT on {{ticker}} at {{close}} | Hold a bit longer")
+alertcondition(sShort, title="S-TIER SHORT", message="🥇 S-TIER SHORT {{ticker}} @ {{close}} | SL: WICK HIGH | HOLD LONGER")
+alertcondition(aShort, title="A-TIER SHORT", message="🥈 A-TIER SHORT {{ticker}} @ {{close}} | SL: MID WICK | HOLD A BIT")
+alertcondition(bShort, title="B-TIER SHORT", message="🥉 B-TIER SHORT {{ticker}} @ {{close}} | SL: BODY HIGH | CLOSE QUICK")
 
-// B-Tier Alerts (Close quick)
-alertcondition(bTierLong, title="B-TIER LONG", message="🥉 B-TIER LONG on {{ticker}} at {{close}} | CLOSE QUICK!")
-alertcondition(bTierShort, title="B-TIER SHORT", message="🥉 B-TIER SHORT on {{ticker}} at {{close}} | CLOSE QUICK!")
+alertcondition(londonStart, title="LONDON OPEN", message="London Open - {{ticker}}")
+alertcondition(nyStart, title="NY OPEN", message="NY Open - {{ticker}}")
 
-// Session Alerts
-alertcondition(londonStart, title="LONDON OPEN", message="🔵 London session starting on {{ticker}}")
-alertcondition(nyStart, title="NY OPEN", message="🟢 NY session starting on {{ticker}}")
-
-// Combined Alert
+// Dynamic alert with SL price
 if longSignal or shortSignal
-    string dir = longSignal ? "LONG" : "SHORT"
-    string tier = currentTier
-    string action = currentTier == "S" ? "HOLD LONGER" : currentTier == "A" ? "HOLD A BIT" : "CLOSE QUICK"
+    string t = tier
+    string d = longSignal ? "LONG" : "SHORT"
     float sl = longSignal ? longSL : shortSL
-    alert("GRA | " + tier + "-TIER " + dir + " | " + syminfo.ticker + " @ " + str.tostring(close, format.mintick) + " | SL: " + str.tostring(sl, format.mintick) + " | " + action, alert.freq_once_per_bar_close)
+    string act = isTierS ? "HOLD LONGER" : isTierA ? "HOLD A BIT" : "CLOSE QUICK"
+    alert("GRA " + t + "-" + d + " | " + syminfo.ticker + " @ " + str.tostring(close, format.mintick) + " | SL: " + str.tostring(sl, format.mintick) + " | " + act, alert.freq_once_per_bar_close)
 
 // ══════════════════════════════════════════════════════════════════════════════
 // ██████████████████████████  END OF INDICATOR  ████████████════════════════════
