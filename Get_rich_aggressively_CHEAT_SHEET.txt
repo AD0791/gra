@@ -1,0 +1,100 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║               GET RICH AGGRESSIVELY - QUICK REFERENCE CARD                   ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              SIGNAL GUIDE                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  🟢 Green Bubble    = Buyers winning (LONG bias)                            │
+│  🔴 Red Bubble      = Sellers winning (SHORT bias)                          │
+│                                                                             │
+│  ▲ 4:1+            = STRONG LONG  → Entry on close, 4:1 R:R                │
+│  ▲ 3:1             = LONG SETUP   → Entry on close, 3:1 R:R                │
+│  ▼ 4:1+            = STRONG SHORT → Entry on close, 4:1 R:R                │
+│  ▼ 3:1             = SHORT SETUP  → Entry on close, 3:1 R:R                │
+│                                                                             │
+│  BT!               = Bull Trap    → SHORT (stop above wick)                │
+│  BrT!              = Bear Trap    → LONG (stop below wick)                 │
+│                                                                             │
+│  ◆ Diamond         = Absorption   → Wait for confirmation candle           │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                             INFO PANEL QUICK READ                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Ctrl: BULLS  → Look for LONGS     │  Ctrl: BEARS  → Look for SHORTS       │
+│  Mkt: IMB!    → TRADE              │  Mkt: CHOP    → NO TRADE              │
+│  Sess: NY!    → High probability   │  Sess: ---    → Lower probability     │
+│  Vol: 3x+     → Significant move   │  Vol: 1x      → Normal activity       │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        SETTINGS BY INSTRUMENT                                │
+├───────────────────┬───────────────────┬─────────────────────────────────────┤
+│        NQ         │        GC         │              BTC                    │
+├───────────────────┼───────────────────┼─────────────────────────────────────┤
+│ TF: 5min          │ TF: 5-15min       │ TF: 15min                           │
+│ Vol Spike: 1.5    │ Vol Spike: 1.8    │ Vol Spike: 2.0                      │
+│ Big Trade: 2.5    │ Big Trade: 3.0    │ Big Trade: 3.5                      │
+│ Imbalance: 1.5    │ Imbalance: 1.6    │ Imbalance: 1.7                      │
+│ Strong Imb: 2.0   │ Strong Imb: 2.2   │ Strong Imb: 2.5                     │
+│ Swing LB: 20      │ Swing LB: 25      │ Swing LB: 30                        │
+│ Wick Ratio: 0.4   │ Wick Ratio: 0.45  │ Wick Ratio: 0.5                     │
+├───────────────────┼───────────────────┼─────────────────────────────────────┤
+│ Best: 9:30-11:30  │ Best: 3-5AM &     │ Best: 9:30AM-4PM EST                │
+│ EST (NY Open)     │ 8:30-10:30AM EST  │ (US Session)                        │
+├───────────────────┼───────────────────┼─────────────────────────────────────┤
+│ Avoid: 12-2PM     │ Watch: Econ data  │ Avoid: Weekends                     │
+│ (lunch chop)      │ at 8:30AM         │ (low volume)                        │
+└───────────────────┴───────────────────┴─────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           ENTRY CHECKLIST                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  □ Signal present (▲/▼ or Trap)                                            │
+│  □ Ctrl confirms direction (BULLS for long, BEARS for short)               │
+│  □ Mkt NOT showing CHOP or FV                                              │
+│  □ Volume spike present (Vol: 1.5x+)                                       │
+│  □ During active session (LDN! or NY! preferred)                           │
+│  □ Stop loss identified (beyond wick)                                      │
+│  □ Target identified (3:1 or 4:1 R:R)                                      │
+│  □ Risk ≤ 2% of account                                                    │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              DO NOT TRADE                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ✗ Mkt: CHOP or FV                                                         │
+│  ✗ Ctrl: ---                                                               │
+│  ✗ 12:00 - 2:00 PM EST (futures)                                           │
+│  ✗ Before FOMC, NFP, CPI                                                   │
+│  ✗ BTC on weekends (unless high volume)                                    │
+│  ✗ Against higher timeframe trend                                          │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              KEY TIMES (EST)                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  3:00 AM  - London Open (Gold moves, sets daily bias)                      │
+│  8:30 AM  - Economic Data (Gold, Bonds react first)                        │
+│  9:30 AM  - NY Open (NQ, ES prime time begins)                             │
+│  10:00 AM - Secondary data releases                                         │
+│  11:30 AM - First momentum window ends                                      │
+│  12:00 PM - Lunch begins (avoid)                                            │
+│  2:00 PM  - Afternoon session begins                                        │
+│  4:00 PM  - Cash close (futures continue)                                   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+Remember: The indicator shows WHO is winning. YOU decide IF and WHEN to trade.
+
+                         🚀 GET RICH AGGRESSIVELY 🚀

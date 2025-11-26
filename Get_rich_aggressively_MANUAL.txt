@@ -1,0 +1,284 @@
+█████████████████████████████████████████████████████████████████████████████
+█░░░░░░░░░░░░░░░░ GET RICH AGGRESSIVELY v4 - TIER SYSTEM ░░░░░░░░░░░░░░░░░░░█
+█████████████████████████████████████████████████████████████████████████████
+
+Precision Futures Scalping System | NQ • YM • GC
+Leave Every Trade With Money
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🎯 CONCEPT: THE TIER SYSTEM
+
+This indicator classifies every candle by POINT MOVEMENT, not just volume.
+The bigger the move, the higher the tier, the longer you hold.
+
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │  🥇 S-TIER  │  100+ Points  │  HOLD LONGER - Watch next candle     │
+  ├─────────────────────────────────────────────────────────────────────┤
+  │  🥈 A-TIER  │  50-99 Points │  HOLD A BIT - Let it breathe         │
+  ├─────────────────────────────────────────────────────────────────────┤
+  │  🥉 B-TIER  │  10-49 Points │  CLOSE QUICK - Take profit NOW       │
+  └─────────────────────────────────────────────────────────────────────┘
+
+NO SIGNAL = Candle moved less than 10 points. No trade.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📐 POINT CALCULATION BY INSTRUMENT
+
+The indicator AUTO-DETECTS your instrument:
+
+  ┌─────────────┬────────────┬───────────────┬─────────────────────┐
+  │ INSTRUMENT  │ TICK VALUE │ TICKS/POINT   │ CALCULATION         │
+  ├─────────────┼────────────┼───────────────┼─────────────────────┤
+  │ NQ / MNQ    │ $0.25      │ 4 ticks       │ Range ÷ 0.25 ÷ 4    │
+  │ ES / MES    │ $0.25      │ 4 ticks       │ Range ÷ 0.25 ÷ 4    │
+  │ YM / MYM    │ $1.00      │ 1 tick        │ Range ÷ 1.00 ÷ 1    │
+  │ GC / MGC    │ $0.10      │ 10 ticks      │ Range ÷ 0.10 ÷ 10   │
+  └─────────────┴────────────┴───────────────┴─────────────────────┘
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📊 VISUAL GUIDE
+
+  ┌────────────────────────────────────────────────────────────────┐
+  │                        CANDLE                                  │
+  │                          │                                     │
+  │                     ▼ [S] ← SHORT Signal (S-Tier)             │
+  │                    ─────── ← Stop Loss Line                   │
+  │                                                                │
+  │                          │                                     │
+  │                     [A] ▲ ← LONG Signal (A-Tier)              │
+  │                    ─────── ← Stop Loss Line                   │
+  └────────────────────────────────────────────────────────────────┘
+
+SIGNAL ELEMENTS:
+  • Square Badge [S/A/B] = Tier classification
+  • Arrow ▲▼ = Entry direction (above badge)
+  • Horizontal Line = Trailing Stop Loss placement
+  • "SL" Label = Stop Loss level
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✅ SIGNAL REQUIREMENTS (ALL MUST BE TRUE)
+
+  □ Candle moves ≥ 10 points (Tier B minimum)
+  □ Volume ≥ 1.3x average (no thin markets)
+  □ Delta confirms direction (55%+ dominance)
+  □ Candle direction matches delta direction
+  □ Within London Open OR NY Open (if filter enabled)
+
+If ANY condition fails = NO SIGNAL
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🛡️ THE STOP LOSS SYSTEM
+
+Futures are HIGHLY volatile. Fake-outs happen constantly.
+The indicator places your stop loss AUTOMATICALLY.
+
+LONG TRADE:
+  Stop Loss = Low of signal candle - Buffer (4 ticks default)
+
+SHORT TRADE:
+  Stop Loss = High of signal candle + Buffer (4 ticks default)
+
+The horizontal line shows EXACTLY where your stop goes.
+If price hits that line = EXIT IMMEDIATELY.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📋 TRADING RULES BY TIER
+
+▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
+  🥇 S-TIER (100+ points)
+▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
+
+ACTION: HOLD POSITION LONGER
+
+This is institutional-level movement. Big players are in.
+
+  Entry: On candle close
+  Stop: SL line (do NOT move it)
+  Target: Let it run, watch next candle
+  Management:
+    → If next candle continues = HOLD
+    → If next candle reverses = EXIT on close
+    → If next candle is S-tier same direction = ADD
+
+
+▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
+  🥈 A-TIER (50-99 points)
+▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
+
+ACTION: HOLD A BIT LONGER
+
+Strong move but not exceptional. Give it room.
+
+  Entry: On candle close
+  Stop: SL line
+  Target: 1:1 minimum, trail if continues
+  Management:
+    → If next candle continues = Trail stop to breakeven
+    → If next candle stalls = Take profit
+    → If next candle reverses = EXIT immediately
+
+
+▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
+  🥉 B-TIER (10-49 points)
+▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
+
+ACTION: CLOSE QUICK
+
+Small move. Scalp only. Don't be greedy.
+
+  Entry: On candle close
+  Stop: SL line
+  Target: 5-10 points MAX
+  Management:
+    → Take profit in 1-3 candles
+    → Do NOT hold overnight
+    → If any hesitation = EXIT
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+⚙️ SETTINGS BY INSTRUMENT
+
+▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
+  NQ (NASDAQ-100 FUTURES)
+▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
+
+Timeframe: 1-5 minute
+S-Tier: 100 points
+A-Tier: 50 points
+B-Tier: 10 points
+Min Volume Ratio: 1.3x
+Delta Threshold: 55%
+SL Buffer: 4 ticks (1 point)
+
+Best Session: NY Open (9:30-11:30 EST)
+Avoid: 12:00-2:00 PM (lunch)
+
+
+▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
+  YM (DOW FUTURES)
+▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
+
+Timeframe: 1-5 minute
+S-Tier: 100 points
+A-Tier: 50 points
+B-Tier: 15 points (YM moves slower)
+Min Volume Ratio: 1.3x
+Delta Threshold: 55%
+SL Buffer: 5 ticks (5 points)
+
+Best Session: NY Open (9:30-11:30 EST)
+Avoid: Pre-market (low liquidity)
+
+
+▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
+  GC (GOLD FUTURES)
+▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬
+
+Timeframe: 5-15 minute
+S-Tier: 15 points (Gold points are bigger)
+A-Tier: 8 points
+B-Tier: 3 points
+Min Volume Ratio: 1.5x (gold needs more confirmation)
+Delta Threshold: 58%
+SL Buffer: 10 ticks (1 point)
+
+Best Session: London (3-5 AM) & NY (8:30-10:30 EST)
+Watch: Economic releases at 8:30 AM
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📈 INFO PANEL EXPLAINED
+
+  GRA v4 │ NQ    ← Indicator version + detected instrument
+  Points │ 87.5  ← Current candle point movement
+  Tier   │ A     ← Classification (S/A/B/X)
+  Vol    │ 2.3x  ← Volume vs average (green=ok, red=low)
+  Delta  │ 62% B ← Buy dominance % (or Sell)
+  Dir    │ LONG  ← Confirmed direction
+  Sess   │ NY!   ← Active session (LDN!/NY!/---)
+  Signal │ A▲    ← Current signal if any
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+⚠️ AVOIDING FAKE-OUTS
+
+Futures are designed to shake you out. Here's how to survive:
+
+  1. TRUST THE SL LINE
+     → It's calculated from the candle low/high + buffer
+     → Do NOT move it closer
+     → If hit = exit, no questions
+
+  2. VOLUME CONFIRMS EVERYTHING
+     → No volume = no trade
+     → The 1.3x minimum filter exists for a reason
+     → Gray volume in panel = STAY OUT
+
+  3. DELTA MUST AGREE
+     → If candle is green but delta shows sellers = NO TRADE
+     → 55% dominance minimum means real conviction
+     → Anything less is noise
+
+  4. SESSION MATTERS
+     → London/NY have real volume
+     → Off-hours are chop city
+     → Enable session filter and RESPECT IT
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔔 AVAILABLE ALERTS
+
+  • S-TIER LONG/SHORT - Major move, hold longer
+  • A-TIER LONG/SHORT - Good move, hold a bit
+  • B-TIER LONG/SHORT - Small move, close quick
+  • LONDON OPEN - Session start
+  • NY OPEN - Session start
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+💰 THE GOLDEN RULE
+
+  ╔═══════════════════════════════════════════════════════════════════╗
+  ║                                                                   ║
+  ║         LEAVE EVERY TRADE WITH MONEY                              ║
+  ║                                                                   ║
+  ║    • B-Tier = Small profit, move on                              ║
+  ║    • A-Tier = Reasonable profit, protect it                      ║
+  ║    • S-Tier = Let it run, but NEVER give it all back             ║
+  ║                                                                   ║
+  ║    If SL hits → You kept your capital                            ║
+  ║    If target hits → You made money                               ║
+  ║    Either way → You survive to trade tomorrow                    ║
+  ║                                                                   ║
+  ╚═══════════════════════════════════════════════════════════════════╝
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+⚠️ DISCLAIMER
+
+This indicator is a tool, not a crystal ball. Risk management is YOUR 
+responsibility. Never risk more than 1-2% per trade. Paper trade first.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Get Rich. Stay Rich. Trade Aggressively. 🚀
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
