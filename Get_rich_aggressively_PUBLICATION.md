@@ -1,3 +1,5 @@
+<div style="color: #FFFFFF; background-color: transparent;">
+
 # 🚀 GET RICH AGGRESSIVELY v4 - TIER SYSTEM
 
 ### Precision Futures Scalping | NQ • YM • GC
@@ -44,6 +46,8 @@ Wider SL for bigger moves, tighter SL for scalps.
 | 🥉 B-TIER | Just below **BODY LOW** | Quick scalp, minimize risk |
 | 🥈 A-TIER | **Midpoint** of lower wick | Give room but not too much |
 | 🥇 S-TIER | At candle **LOW** | Big move expected, avoid fake-outs |
+
+---
 
 ### 📉 SHORT TRADE STOP LOSS
 
@@ -92,7 +96,7 @@ Wider SL for bigger moves, tighter SL for scalps.
 
 **Signal Elements:**
 - `▲ / ▼` = Direction arrow
-- `[S/A/B]` = Tier badge
+- `[S/A/B]` = Tier badge  
 - `─────` = Stop Loss line (at OHLC level)
 
 ---
@@ -101,11 +105,11 @@ Wider SL for bigger moves, tighter SL for scalps.
 
 **All must be TRUE for a signal:**
 
-- [ ] Points ≥ 10 (B-tier minimum)
-- [ ] Volume ≥ 1.3x average
-- [ ] Delta dominance ≥ 55%
-- [ ] Candle direction = Delta direction
-- [ ] In session (if filter ON)
+- ☐ Points ≥ 10 (B-tier minimum)
+- ☐ Volume ≥ 1.3x average
+- ☐ Delta dominance ≥ 55%
+- ☐ Candle direction = Delta direction
+- ☐ In session (if filter ON)
 
 > ⚠️ **ANY condition FALSE = NO SIGNAL = NO TRADE**
 
@@ -189,22 +193,22 @@ Wider SL for bigger moves, tighter SL for scalps.
 
 Futures **WILL** try to shake you out. The SL system is designed to keep you in winning trades and out of losing ones.
 
-### 1. SL IS BASED ON STRUCTURE
+**1. SL IS BASED ON STRUCTURE**
 - Not arbitrary — based on actual candle OHLC
 - **Wick** = where price was rejected
 - **Body** = where price accepted value
 
-### 2. TIER DETERMINES SL WIDTH
+**2. TIER DETERMINES SL WIDTH**
 - Big move (S) = wide SL (wick)
 - Medium move (A) = medium SL (mid-wick)
 - Small move (B) = tight SL (body)
 
-### 3. IF SL HITS, IT MEANS:
+**3. IF SL HITS, IT MEANS:**
 - The structure that gave the signal is broken
 - The move has failed
 - **GET OUT** — the signal was wrong
 
-### 4. DO NOT:
+**4. DO NOT:**
 - ❌ Move SL closer (you'll get stopped on noise)
 - ❌ Move SL further (you'll take bigger losses)
 - ❌ Ignore SL (you'll blow up)
@@ -249,5 +253,7 @@ Futures **WILL** try to shake you out. The SL system is designed to keep you in 
 <div align="center">
 
 ### Get Rich. Stay Rich. Trade Aggressively. 🚀
+
+</div>
 
 </div>

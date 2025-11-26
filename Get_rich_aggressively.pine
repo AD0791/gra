@@ -231,28 +231,28 @@ color tierCol = isTierS ? sTierColor : isTierA ? aTierColor : isTierB ? bTierCol
 // ─────────────────────── LONG SIGNALS (Below candle) ──────────────────────────
 // S-Tier Long
 plotshape(sLong, "S Long Arrow", shape.triangleup, location.belowbar, longColor, size=size.tiny)
-plotshape(sLong, "S Long Badge", shape.square, location.belowbar, sTierColor, size=size.tiny, text="S", textcolor=color.black, offset=0)
+plotshape(sLong, "S Long Badge", shape.square, location.belowbar, sTierColor, size=size.tiny, text="S", textcolor=color.white, offset=0)
 
 // A-Tier Long
 plotshape(aLong, "A Long Arrow", shape.triangleup, location.belowbar, longColor, size=size.tiny)
-plotshape(aLong, "A Long Badge", shape.square, location.belowbar, aTierColor, size=size.tiny, text="A", textcolor=color.black, offset=0)
+plotshape(aLong, "A Long Badge", shape.square, location.belowbar, aTierColor, size=size.tiny, text="A", textcolor=color.white, offset=0)
 
 // B-Tier Long
 plotshape(bLong, "B Long Arrow", shape.triangleup, location.belowbar, longColor, size=size.tiny)
-plotshape(bLong, "B Long Badge", shape.square, location.belowbar, bTierColor, size=size.tiny, text="B", textcolor=color.black, offset=0)
+plotshape(bLong, "B Long Badge", shape.square, location.belowbar, bTierColor, size=size.tiny, text="B", textcolor=color.white, offset=0)
 
 // ─────────────────────── SHORT SIGNALS (Above candle) ─────────────────────────
 // S-Tier Short
 plotshape(sShort, "S Short Arrow", shape.triangledown, location.abovebar, shortColor, size=size.tiny)
-plotshape(sShort, "S Short Badge", shape.square, location.abovebar, sTierColor, size=size.tiny, text="S", textcolor=color.black, offset=0)
+plotshape(sShort, "S Short Badge", shape.square, location.abovebar, sTierColor, size=size.tiny, text="S", textcolor=color.white, offset=0)
 
 // A-Tier Short
 plotshape(aShort, "A Short Arrow", shape.triangledown, location.abovebar, shortColor, size=size.tiny)
-plotshape(aShort, "A Short Badge", shape.square, location.abovebar, aTierColor, size=size.tiny, text="A", textcolor=color.black, offset=0)
+plotshape(aShort, "A Short Badge", shape.square, location.abovebar, aTierColor, size=size.tiny, text="A", textcolor=color.white, offset=0)
 
 // B-Tier Short
 plotshape(bShort, "B Short Arrow", shape.triangledown, location.abovebar, shortColor, size=size.tiny)
-plotshape(bShort, "B Short Badge", shape.square, location.abovebar, bTierColor, size=size.tiny, text="B", textcolor=color.black, offset=0)
+plotshape(bShort, "B Short Badge", shape.square, location.abovebar, bTierColor, size=size.tiny, text="B", textcolor=color.white, offset=0)
 
 // ─────────────────────── STOP LOSS LINES ──────────────────────────────────────
 // Long SL Lines - drawn AT the calculated SL level WITHIN candle structure
@@ -283,39 +283,39 @@ if barstate.islast
     table.cell(panel, 1, 0, instrumentType, text_color=color.white, text_size=size.small, bgcolor=color.new(#FFD700, 70))
     
     // Points
-    table.cell(panel, 0, 1, "Pts", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 0, 1, "Pts", text_color=color.white, text_size=size.tiny)
     table.cell(panel, 1, 1, str.tostring(candlePoints, "#.#"), text_color=tierCol, text_size=size.tiny)
     
     // Tier
-    table.cell(panel, 0, 2, "Tier", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 0, 2, "Tier", text_color=color.white, text_size=size.tiny)
     table.cell(panel, 1, 2, tier, text_color=tierCol, text_size=size.tiny)
     
     // Volume
-    table.cell(panel, 0, 3, "Vol", text_color=color.gray, text_size=size.tiny)
+    table.cell(panel, 0, 3, "Vol", text_color=color.white, text_size=size.tiny)
     color vCol = strongVol ? color.yellow : hasVolume ? color.green : color.red
     table.cell(panel, 1, 3, str.tostring(volRatio, "#.#") + "x", text_color=vCol, text_size=size.tiny)
     
     // Delta
     string dStr = buyPct > sellPct ? str.tostring(buyPct * 100, "#") + "%B" : str.tostring(sellPct * 100, "#") + "%S"
-    color dCol = buyDominant ? longColor : sellDominant ? shortColor : color.gray
-    table.cell(panel, 0, 4, "Delta", text_color=color.gray, text_size=size.tiny)
+    color dCol = buyDominant ? longColor : sellDominant ? shortColor : color.white
+    table.cell(panel, 0, 4, "Delta", text_color=color.white, text_size=size.tiny)
     table.cell(panel, 1, 4, dStr, text_color=dCol, text_size=size.tiny)
     
     // Direction
     string dirStr = confirmedLong ? "LONG" : confirmedShort ? "SHORT" : "---"
-    color dirCol = confirmedLong ? longColor : confirmedShort ? shortColor : color.gray
-    table.cell(panel, 0, 5, "Dir", text_color=color.gray, text_size=size.tiny)
+    color dirCol = confirmedLong ? longColor : confirmedShort ? shortColor : color.white
+    table.cell(panel, 0, 5, "Dir", text_color=color.white, text_size=size.tiny)
     table.cell(panel, 1, 5, dirStr, text_color=dirCol, text_size=size.tiny)
     
     // Session
     string sStr = inNY ? "NY!" : inLondon ? "LDN!" : "---"
-    table.cell(panel, 0, 6, "Sess", text_color=color.gray, text_size=size.tiny)
-    table.cell(panel, 1, 6, sStr, text_color=inSession ? color.yellow : color.gray, text_size=size.tiny)
+    table.cell(panel, 0, 6, "Sess", text_color=color.white, text_size=size.tiny)
+    table.cell(panel, 1, 6, sStr, text_color=inSession ? color.yellow : color.white, text_size=size.tiny)
     
     // Signal + SL
     string sigStr = sLong ? "S▲" : aLong ? "A▲" : bLong ? "B▲" : sShort ? "S▼" : aShort ? "A▼" : bShort ? "B▼" : "---"
-    color sigCol = longSignal ? longColor : shortSignal ? shortColor : color.gray
-    table.cell(panel, 0, 7, "Sig", text_color=color.gray, text_size=size.tiny)
+    color sigCol = longSignal ? longColor : shortSignal ? shortColor : color.white
+    table.cell(panel, 0, 7, "Sig", text_color=color.white, text_size=size.tiny)
     table.cell(panel, 1, 7, sigStr, text_color=sigCol, text_size=size.tiny)
 
 // ══════════════════════════════════════════════════════════════════════════════
