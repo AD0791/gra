@@ -1,0 +1,660 @@
+//@version=6
+// ══════════════════════════════════════════════════════════════════════════════
+// █████████████████  DEEPFLOW ULTIMATE SUITE v1.0  █████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+// Institutional Order Flow Analysis for NQ Futures Scalping
+// Companion to Get_rich_aggressively Tier System
+// © Alexandro Disla - DeepCharts-Style Implementation
+// ══════════════════════════════════════════════════════════════════════════════
+
+indicator("DeepFlow Ultimate Suite [Institutional Order Flow]", shorttitle="DeepFlow", overlay=true, 
+     max_lines_count=500, max_boxes_count=500, max_labels_count=500)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████████  USER DEFINED TYPES  ████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+// FVG Tracking Structure (solves box.get_bgcolor() limitation)
+type FVGData
+    box     box_ref
+    bool    is_bull        // true = bullish FVG, false = bearish FVG
+    float   top_price
+    float   bottom_price
+    float   ce_level       // Consequent Encroachment (50% level)
+    int     state          // 0=fresh, 1=tested, 2=ce_touched, 3=mitigated, 4=inverted
+    int     creation_bar
+    bool    is_single_print
+    float   volume_ratio   // Volume confirmation strength
+
+// Iceberg Detection Structure
+type IcebergData
+    int     bar_idx
+    float   price_level
+    float   absorbed_volume
+    bool    is_bid_side    // true = bid absorption, false = ask absorption
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████████  CONFIGURATION  █████████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─────────────────────── 1. IVB SESSION MODEL ────────────────────────────────
+grp_ivb = "═══════════ 1. IVB SESSION MODEL ═══════════"
+show_ivb = input.bool(true, "Show Initial Balance Ranges", group=grp_ivb)
+sess_london = input.session("0300-0400", "London IB Window (ET)", group=grp_ivb, 
+     tooltip="First hour of London session - establishes session framework")
+sess_ny = input.session("0930-1030", "NY IB Window (ET)", group=grp_ivb,
+     tooltip="First hour of NY session - highest volume period")
+show_extensions = input.bool(true, "Show IB Extensions (1.5x, 2x)", group=grp_ivb)
+ivb_col_lon = input.color(color.new(#2196F3, 30), "London IB Color", group=grp_ivb)
+ivb_col_ny = input.color(color.new(#FF9800, 30), "NY IB Color", group=grp_ivb)
+
+// ─────────────────────── 2. FVG & SINGLE PRINTS ──────────────────────────────
+grp_fvg = "═══════════ 2. FVG & SINGLE PRINTS ═══════════"
+show_fvg = input.bool(true, "Show Fair Value Gaps", group=grp_fvg)
+show_ifvg = input.bool(true, "Track Inversion FVG (IFVG)", group=grp_fvg)
+fvg_single_only = input.bool(false, "Single Prints Only", group=grp_fvg,
+     tooltip="Only show FVGs created by impulse candles (institutional moves)")
+fvg_volume_confirm = input.bool(true, "Require Volume Confirmation", group=grp_fvg)
+fvg_vol_mult = input.float(1.3, "FVG Volume Multiplier", minval=1.0, step=0.1, group=grp_fvg)
+show_ce = input.bool(true, "Show CE Level (50%)", group=grp_fvg,
+     tooltip="Consequent Encroachment - institutional reaction point")
+fvg_max_age = input.int(100, "Max FVG Age (bars)", minval=20, maxval=500, group=grp_fvg)
+fvg_bull_col = input.color(color.new(#00E676, 85), "Bullish FVG", group=grp_fvg)
+fvg_bear_col = input.color(color.new(#FF5252, 85), "Bearish FVG", group=grp_fvg)
+fvg_inv_col = input.color(color.new(#9C27B0, 80), "Inverted FVG", group=grp_fvg)
+
+// ─────────────────────── 3. DEEP EFFORT (VSA) ────────────────────────────────
+grp_vsa = "═══════════ 3. DEEP EFFORT (VSA) ═══════════"
+show_effort = input.bool(true, "Color Bars by Effort vs Result", group=grp_vsa)
+effort_period = input.int(20, "VSA Lookback", minval=10, maxval=50, group=grp_vsa)
+effort_threshold = input.float(1.5, "Effort Threshold", minval=1.0, step=0.1, group=grp_vsa,
+     tooltip="Volume/Spread divergence threshold")
+col_effort_buy = input.color(#00E676, "Strong Buying Effort", group=grp_vsa)
+col_effort_sell = input.color(#FF5252, "Strong Selling Effort", group=grp_vsa)
+col_absorption = input.color(#E040FB, "Absorption (Squat)", group=grp_vsa)
+col_no_demand = input.color(#78909C, "No Demand/Supply", group=grp_vsa)
+
+// ─────────────────────── 4. DEEP WALL (ICEBERGS) ─────────────────────────────
+grp_ice = "═══════════ 4. DEEP WALL (ICEBERGS) ═══════════"
+show_iceberg = input.bool(true, "Show Iceberg Detection", group=grp_ice)
+ice_vol_mult = input.float(2.0, "Iceberg Volume Multiple", minval=1.5, step=0.1, group=grp_ice)
+ice_range_max = input.float(0.5, "Max Range % of Average", minval=0.3, maxval=0.8, step=0.1, group=grp_ice,
+     tooltip="High volume + tiny range = hidden liquidity")
+
+// ─────────────────────── 5. STOP RUN SPOTTER ─────────────────────────────────
+grp_sfp = "═══════════ 5. STOP RUN SPOTTER ═══════════"
+show_sfp = input.bool(true, "Show Stop Run / SFP", group=grp_sfp)
+sfp_lookback = input.int(10, "Swing Lookback", minval=3, maxval=20, group=grp_sfp)
+sfp_wick_ratio = input.float(1.5, "Min Wick/Body Ratio", minval=1.0, step=0.1, group=grp_sfp)
+
+// ─────────────────────── 6. SESSION VWAP ─────────────────────────────────────
+grp_vwap = "═══════════ 6. SESSION VWAP ═══════════"
+show_vwap = input.bool(true, "Show Session VWAP", group=grp_vwap)
+show_vwap_bands = input.bool(true, "Show Deviation Bands", group=grp_vwap)
+vwap_stdev = input.float(2.0, "Band StDev Multiplier", minval=1.0, maxval=3.0, step=0.5, group=grp_vwap)
+vwap_anchor = input.string("Session", "VWAP Anchor", options=["Session", "Day", "Week"], group=grp_vwap)
+
+// ─────────────────────── 7. CVD (CUMULATIVE DELTA) ───────────────────────────
+grp_cvd = "═══════════ 7. CUMULATIVE VOLUME DELTA ═══════════"
+show_cvd_div = input.bool(true, "Show CVD Divergence Signals", group=grp_cvd)
+cvd_ltf = input.timeframe("1", "Intrabar Timeframe", group=grp_cvd)
+cvd_div_bars = input.int(5, "Divergence Lookback", minval=3, maxval=20, group=grp_cvd)
+
+// ─────────────────────── 8. LOW VOLUME NODES ─────────────────────────────────
+grp_lvn = "═══════════ 8. LOW VOLUME NODES ═══════════"
+show_lvn = input.bool(true, "Show LVN Zones", group=grp_lvn)
+lvn_lookback = input.int(50, "LVN Lookback Bars", minval=20, maxval=200, group=grp_lvn)
+lvn_threshold = input.float(0.5, "LVN Threshold (% of avg)", minval=0.2, maxval=0.8, step=0.1, group=grp_lvn)
+lvn_col = input.color(color.new(#FFEB3B, 70), "LVN Zone Color", group=grp_lvn)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████████  CORE CALCULATIONS  █████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─────────────────────── VOLUME METRICS ──────────────────────────────────────
+float avg_vol = ta.sma(volume, effort_period)
+float avg_range = ta.sma(high - low, effort_period)
+float vol_ratio = avg_vol > 0 ? volume / avg_vol : 1.0
+float range_ratio = avg_range > 0 ? (high - low) / avg_range : 1.0
+
+// Candle structure
+float body_size = math.abs(close - open)
+float upper_wick = high - math.max(close, open)
+float lower_wick = math.min(close, open) - low
+float candle_range = high - low
+bool is_bullish = close > open
+bool is_bearish = close < open
+
+// Impulse candle detection (for single prints)
+bool is_impulse = candle_range > avg_range * 1.5 and body_size > candle_range * 0.6
+
+// ─────────────────────── INTRABAR VOLUME DELTA ───────────────────────────────
+var float bar_delta = 0.0
+var float buy_vol = 0.0
+var float sell_vol = 0.0
+var float cvd = 0.0
+
+if timeframe.isintraday
+    [ltf_o, ltf_c, ltf_v, ltf_h, ltf_l] = request.security_lower_tf(syminfo.tickerid, cvd_ltf, [open, close, volume, high, low])
+    
+    if array.size(ltf_c) > 0
+        float temp_buy = 0.0
+        float temp_sell = 0.0
+        
+        for i = 0 to array.size(ltf_c) - 1
+            float r = array.get(ltf_h, i) - array.get(ltf_l, i)
+            float c = array.get(ltf_c, i)
+            float o = array.get(ltf_o, i)
+            float v = array.get(ltf_v, i)
+            
+            if r > 0
+                // Proportional allocation based on close position
+                float buy_pct = (c - array.get(ltf_l, i)) / r
+                temp_buy += buy_pct * v
+                temp_sell += (1 - buy_pct) * v
+            else
+                // Doji - split evenly or by direction
+                if c >= o
+                    temp_buy += v
+                else
+                    temp_sell += v
+        
+        buy_vol := temp_buy
+        sell_vol := temp_sell
+        bar_delta := temp_buy - temp_sell
+    else
+        // Fallback: single-bar approximation
+        float close_pct = candle_range > 0 ? (close - low) / candle_range : 0.5
+        buy_vol := close_pct * volume
+        sell_vol := (1 - close_pct) * volume
+        bar_delta := buy_vol - sell_vol
+else
+    float close_pct = candle_range > 0 ? (close - low) / candle_range : 0.5
+    buy_vol := close_pct * volume
+    sell_vol := (1 - close_pct) * volume
+    bar_delta := buy_vol - sell_vol
+
+// Cumulative Volume Delta
+cvd := cvd + bar_delta
+
+// Delta percentages
+float total_vol = buy_vol + sell_vol
+float buy_pct = total_vol > 0 ? buy_vol / total_vol : 0.5
+float sell_pct = total_vol > 0 ? sell_vol / total_vol : 0.5
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████  DEEP EFFORT (VSA ANALYSIS)  ████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Effort = Volume, Result = Price Movement
+float effort = vol_ratio
+float result = range_ratio
+float effort_vs_result = effort - result
+
+// VSA Classifications
+bool high_vol = vol_ratio > 1.3
+bool very_high_vol = vol_ratio > 2.0
+bool low_vol = vol_ratio < 0.7
+bool wide_spread = range_ratio > 1.2
+bool narrow_spread = range_ratio < 0.7
+bool tiny_spread = range_ratio < 0.5
+
+// Pattern Detection
+bool strong_buy_effort = is_bullish and high_vol and wide_spread and buy_pct > 0.6
+bool strong_sell_effort = is_bearish and high_vol and wide_spread and sell_pct > 0.6
+bool absorption = very_high_vol and tiny_spread  // High volume, no movement = hidden orders
+bool no_demand = is_bullish and low_vol and narrow_spread  // Up bar, no buying interest
+bool no_supply = is_bearish and low_vol and narrow_spread  // Down bar, no selling pressure
+bool stopping_volume = very_high_vol and narrow_spread and (lower_wick > body_size * 2)  // Absorption at lows
+
+// Bar coloring
+color effort_bar_col = na
+if show_effort
+    if absorption
+        effort_bar_col := col_absorption
+    else if strong_buy_effort
+        effort_bar_col := col_effort_buy
+    else if strong_sell_effort
+        effort_bar_col := col_effort_sell
+    else if no_demand or no_supply
+        effort_bar_col := col_no_demand
+
+barcolor(effort_bar_col)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████  DEEP WALL (ICEBERG DETECTION)  █████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Iceberg: Very high volume but tiny price movement = hidden liquidity absorbing orders
+bool is_iceberg = vol_ratio > ice_vol_mult and range_ratio < ice_range_max
+
+// Determine iceberg side based on delta
+bool iceberg_bid = is_iceberg and buy_pct > 0.55  // Bid-side absorption (bullish)
+bool iceberg_ask = is_iceberg and sell_pct > 0.55  // Ask-side absorption (bearish)
+
+// Plot iceberg markers
+plotchar(show_iceberg and iceberg_bid, "Bid Iceberg", "▼", location.abovebar, 
+     color.new(#00BCD4, 0), size=size.tiny)
+plotchar(show_iceberg and iceberg_ask, "Ask Iceberg", "▲", location.belowbar, 
+     color.new(#00BCD4, 0), size=size.tiny)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████  FVG ENGINE WITH UDT TRACKING  ██████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+// FVG Detection
+bool fvg_bull = low > high[2]  // Gap up: current low above 2-bars-ago high
+bool fvg_bear = high < low[2]  // Gap down: current high below 2-bars-ago low
+
+// Volume confirmation for FVG
+bool fvg_vol_ok = not fvg_volume_confirm or (volume[1] > avg_vol * fvg_vol_mult)
+
+// Single print filter (impulse-created FVGs only)
+bool single_print_ok = not fvg_single_only or is_impulse[1]
+
+// Valid FVG conditions
+bool valid_bull_fvg = fvg_bull and fvg_vol_ok and single_print_ok
+bool valid_bear_fvg = fvg_bear and fvg_vol_ok and single_print_ok
+
+// FVG Array Management
+var FVGData[] fvg_array = array.new<FVGData>(0)
+
+// Create new FVGs
+if show_fvg
+    if valid_bull_fvg
+        float top = low
+        float bottom = high[2]
+        float ce = bottom + (top - bottom) / 2
+        box b = box.new(bar_index[2], top, bar_index + 10, bottom, 
+             border_color=color.new(fvg_bull_col, 50), bgcolor=fvg_bull_col, border_width=1)
+        
+        FVGData data = FVGData.new(
+             box_ref = b,
+             is_bull = true,
+             top_price = top,
+             bottom_price = bottom,
+             ce_level = ce,
+             state = 0,
+             creation_bar = bar_index,
+             is_single_print = is_impulse[1],
+             volume_ratio = vol_ratio[1]
+         )
+        array.push(fvg_array, data)
+        
+        // Draw CE line
+        if show_ce
+            line.new(bar_index[2], ce, bar_index + 10, ce, 
+                 color=color.new(fvg_bull_col, 30), style=line.style_dotted, width=1)
+    
+    if valid_bear_fvg
+        float top = low[2]
+        float bottom = high
+        float ce = bottom + (top - bottom) / 2
+        box b = box.new(bar_index[2], top, bar_index + 10, bottom, 
+             border_color=color.new(fvg_bear_col, 50), bgcolor=fvg_bear_col, border_width=1)
+        
+        FVGData data = FVGData.new(
+             box_ref = b,
+             is_bull = false,
+             top_price = top,
+             bottom_price = bottom,
+             ce_level = ce,
+             state = 0,
+             creation_bar = bar_index,
+             is_single_print = is_impulse[1],
+             volume_ratio = vol_ratio[1]
+         )
+        array.push(fvg_array, data)
+        
+        if show_ce
+            line.new(bar_index[2], ce, bar_index + 10, ce, 
+                 color=color.new(fvg_bear_col, 30), style=line.style_dotted, width=1)
+
+// Update FVG States (Mitigation & Inversion Tracking)
+if array.size(fvg_array) > 0
+    for i = array.size(fvg_array) - 1 to 0
+        FVGData d = array.get(fvg_array, i)
+        
+        // Skip if too old
+        int age = bar_index - d.creation_bar
+        if age > fvg_max_age
+            box.delete(d.box_ref)
+            array.remove(fvg_array, i)
+            continue
+        
+        // Extend box to current bar
+        box.set_right(d.box_ref, bar_index + 5)
+        
+        // State machine for FVG lifecycle
+        if d.is_bull
+            // Bullish FVG states
+            if d.state == 0  // Fresh
+                if low <= d.ce_level
+                    d.state := 2  // CE touched
+                    box.set_bgcolor(d.box_ref, color.new(fvg_bull_col, 70))
+                else if low <= d.top_price
+                    d.state := 1  // Tested
+            
+            if d.state < 3 and close < d.bottom_price
+                // Full mitigation - check for inversion
+                if show_ifvg and is_bearish and vol_ratio > 1.2
+                    d.state := 4  // Inverted to bearish
+                    d.is_bull := false
+                    box.set_bgcolor(d.box_ref, fvg_inv_col)
+                    box.set_border_color(d.box_ref, color.new(#9C27B0, 30))
+                else
+                    d.state := 3  // Mitigated
+                    box.set_bgcolor(d.box_ref, color.new(color.gray, 90))
+        
+        else
+            // Bearish FVG states
+            if d.state == 0  // Fresh
+                if high >= d.ce_level
+                    d.state := 2  // CE touched
+                    box.set_bgcolor(d.box_ref, color.new(fvg_bear_col, 70))
+                else if high >= d.bottom_price
+                    d.state := 1  // Tested
+            
+            if d.state < 3 and close > d.top_price
+                // Full mitigation - check for inversion
+                if show_ifvg and is_bullish and vol_ratio > 1.2
+                    d.state := 4  // Inverted to bullish
+                    d.is_bull := true
+                    box.set_bgcolor(d.box_ref, fvg_inv_col)
+                    box.set_border_color(d.box_ref, color.new(#9C27B0, 30))
+                else
+                    d.state := 3  // Mitigated
+                    box.set_bgcolor(d.box_ref, color.new(color.gray, 90))
+
+// Garbage collection - limit array size
+while array.size(fvg_array) > 50
+    FVGData old = array.shift(fvg_array)
+    box.delete(old.box_ref)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████  IVB SESSION MODEL  █████████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Session detection with proper timezone
+string tz = "America/New_York"
+bool in_london_ib = not na(time(timeframe.period, sess_london, tz))
+bool in_ny_ib = not na(time(timeframe.period, sess_ny, tz))
+
+// Session starts
+bool london_ib_start = in_london_ib and not in_london_ib[1]
+bool ny_ib_start = in_ny_ib and not in_ny_ib[1]
+bool london_ib_end = not in_london_ib and in_london_ib[1]
+bool ny_ib_end = not in_ny_ib and in_ny_ib[1]
+
+// Track IB ranges
+var float lon_ib_high = na
+var float lon_ib_low = na
+var float ny_ib_high = na
+var float ny_ib_low = na
+
+// London IB
+if in_london_ib
+    if london_ib_start
+        lon_ib_high := high
+        lon_ib_low := low
+    else
+        lon_ib_high := math.max(lon_ib_high, high)
+        lon_ib_low := math.min(lon_ib_low, low)
+
+// NY IB
+if in_ny_ib
+    if ny_ib_start
+        ny_ib_high := high
+        ny_ib_low := low
+    else
+        ny_ib_high := math.max(ny_ib_high, high)
+        ny_ib_low := math.min(ny_ib_low, low)
+
+// Calculate extensions
+float lon_range = lon_ib_high - lon_ib_low
+float ny_range = ny_ib_high - ny_ib_low
+
+float lon_ext_1_5_high = lon_ib_high + lon_range * 0.5
+float lon_ext_1_5_low = lon_ib_low - lon_range * 0.5
+float lon_ext_2_0_high = lon_ib_high + lon_range
+float lon_ext_2_0_low = lon_ib_low - lon_range
+
+float ny_ext_1_5_high = ny_ib_high + ny_range * 0.5
+float ny_ext_1_5_low = ny_ib_low - ny_range * 0.5
+float ny_ext_2_0_high = ny_ib_high + ny_range
+float ny_ext_2_0_low = ny_ib_low - ny_range
+
+// Plot IB Ranges
+plot(show_ivb and not na(lon_ib_high) ? lon_ib_high : na, "Lon IB High", ivb_col_lon, 2, plot.style_linebr)
+plot(show_ivb and not na(lon_ib_low) ? lon_ib_low : na, "Lon IB Low", ivb_col_lon, 2, plot.style_linebr)
+plot(show_ivb and not na(ny_ib_high) ? ny_ib_high : na, "NY IB High", ivb_col_ny, 2, plot.style_linebr)
+plot(show_ivb and not na(ny_ib_low) ? ny_ib_low : na, "NY IB Low", ivb_col_ny, 2, plot.style_linebr)
+
+// Plot Extensions
+plot(show_ivb and show_extensions and not na(lon_ext_1_5_high) ? lon_ext_1_5_high : na, "Lon 1.5x High", color.new(ivb_col_lon, 60), 1, plot.style_linebr)
+plot(show_ivb and show_extensions and not na(lon_ext_1_5_low) ? lon_ext_1_5_low : na, "Lon 1.5x Low", color.new(ivb_col_lon, 60), 1, plot.style_linebr)
+plot(show_ivb and show_extensions and not na(ny_ext_1_5_high) ? ny_ext_1_5_high : na, "NY 1.5x High", color.new(ivb_col_ny, 60), 1, plot.style_linebr)
+plot(show_ivb and show_extensions and not na(ny_ext_1_5_low) ? ny_ext_1_5_low : na, "NY 1.5x Low", color.new(ivb_col_ny, 60), 1, plot.style_linebr)
+
+// IB Breakout Detection (with volume + impulse confirmation)
+bool lon_break_up = ta.crossover(close, lon_ib_high) and is_impulse and vol_ratio > 1.3
+bool lon_break_dn = ta.crossunder(close, lon_ib_low) and is_impulse and vol_ratio > 1.3
+bool ny_break_up = ta.crossover(close, ny_ib_high) and is_impulse and vol_ratio > 1.3
+bool ny_break_dn = ta.crossunder(close, ny_ib_low) and is_impulse and vol_ratio > 1.3
+
+// Plot breakout signals
+plotshape(lon_break_up, "Lon Break Up", shape.triangleup, location.belowbar, 
+     ivb_col_lon, size=size.small, text="LON▲", textcolor=color.white)
+plotshape(lon_break_dn, "Lon Break Dn", shape.triangledown, location.abovebar, 
+     ivb_col_lon, size=size.small, text="LON▼", textcolor=color.white)
+plotshape(ny_break_up, "NY Break Up", shape.triangleup, location.belowbar, 
+     ivb_col_ny, size=size.small, text="NY▲", textcolor=color.white)
+plotshape(ny_break_dn, "NY Break Dn", shape.triangledown, location.abovebar, 
+     ivb_col_ny, size=size.small, text="NY▼", textcolor=color.white)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████  STOP RUN SPOTTER (SFP)  ████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Pivot detection
+float pivot_high = ta.pivothigh(high, sfp_lookback, sfp_lookback)
+float pivot_low = ta.pivotlow(low, sfp_lookback, sfp_lookback)
+
+var float last_swing_high = na
+var float last_swing_low = na
+
+if not na(pivot_high)
+    last_swing_high := pivot_high
+if not na(pivot_low)
+    last_swing_low := pivot_low
+
+// Swing Failure Pattern Detection
+// Bearish SFP: Wick above swing high, close below it (stop run then rejection)
+float wick_above = high - math.max(open, close)
+float wick_below = math.min(open, close) - low
+bool sfp_wick_ok_bear = body_size > 0 ? wick_above / body_size >= sfp_wick_ratio : wick_above > avg_range * 0.5
+bool sfp_wick_ok_bull = body_size > 0 ? wick_below / body_size >= sfp_wick_ratio : wick_below > avg_range * 0.5
+
+bool sfp_bear = not na(last_swing_high) and high > last_swing_high and close < last_swing_high and sfp_wick_ok_bear
+bool sfp_bull = not na(last_swing_low) and low < last_swing_low and close > last_swing_low and sfp_wick_ok_bull
+
+// Volume confirmation for SFP (institutional activity)
+bool sfp_bear_confirmed = sfp_bear and vol_ratio > 1.2
+bool sfp_bull_confirmed = sfp_bull and vol_ratio > 1.2
+
+// Plot SFP signals
+plotshape(show_sfp and sfp_bear_confirmed, "Stop Run Bear", shape.labeldown, location.abovebar, 
+     color.red, text="STOP\nRUN", textcolor=color.white, size=size.tiny)
+plotshape(show_sfp and sfp_bull_confirmed, "Stop Run Bull", shape.labelup, location.belowbar, 
+     color.green, text="STOP\nRUN", textcolor=color.white, size=size.tiny)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████  SESSION VWAP  ██████████████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Determine anchor point
+bool vwap_reset = switch vwap_anchor
+    "Session" => london_ib_start or ny_ib_start
+    "Day" => ta.change(time("D")) != 0
+    "Week" => ta.change(time("W")) != 0
+    => ta.change(time("D")) != 0
+
+// VWAP calculation
+var float vwap_sum = 0.0
+var float vol_sum = 0.0
+var float var_sum = 0.0
+
+if vwap_reset
+    vwap_sum := 0.0
+    vol_sum := 0.0
+    var_sum := 0.0
+
+vwap_sum += hlc3 * volume
+vol_sum += volume
+float my_vwap = vol_sum > 0 ? vwap_sum / vol_sum : hlc3
+
+// Standard deviation for bands
+if vol_sum > 0
+    var_sum += volume * math.pow(hlc3 - my_vwap, 2)
+
+float vwap_std = vol_sum > 0 ? math.sqrt(var_sum / vol_sum) : 0
+float vwap_upper = my_vwap + vwap_std * vwap_stdev
+float vwap_lower = my_vwap - vwap_std * vwap_stdev
+
+// Plot VWAP
+plot(show_vwap ? my_vwap : na, "Session VWAP", color.purple, 2)
+p_upper = plot(show_vwap and show_vwap_bands ? vwap_upper : na, "VWAP Upper", color.new(color.purple, 60))
+p_lower = plot(show_vwap and show_vwap_bands ? vwap_lower : na, "VWAP Lower", color.new(color.purple, 60))
+fill(p_upper, p_lower, color.new(color.purple, 93))
+
+// VWAP Reaction Detection
+bool vwap_bounce_bull = low <= my_vwap and close > my_vwap and is_bullish and vol_ratio > 1.2
+bool vwap_bounce_bear = high >= my_vwap and close < my_vwap and is_bearish and vol_ratio > 1.2
+bool vwap_break_bull = close[1] < my_vwap[1] and close > my_vwap and is_impulse
+bool vwap_break_bear = close[1] > my_vwap[1] and close < my_vwap and is_impulse
+
+plotshape(vwap_bounce_bull, "VWAP Bounce Bull", shape.circle, location.belowbar, 
+     color.new(color.purple, 30), size=size.tiny)
+plotshape(vwap_bounce_bear, "VWAP Bounce Bear", shape.circle, location.abovebar, 
+     color.new(color.purple, 30), size=size.tiny)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████  CVD DIVERGENCE SIGNALS  ████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Track CVD divergence from price
+float price_change = close - close[cvd_div_bars]
+float cvd_change = cvd - cvd[cvd_div_bars]
+
+// Bearish divergence: Price up, CVD down (exhaustion)
+bool cvd_div_bear = price_change > avg_range and cvd_change < 0 and high == ta.highest(high, cvd_div_bars)
+// Bullish divergence: Price down, CVD up (accumulation)  
+bool cvd_div_bull = price_change < -avg_range and cvd_change > 0 and low == ta.lowest(low, cvd_div_bars)
+
+plotshape(show_cvd_div and cvd_div_bear, "CVD Div Bear", shape.xcross, location.abovebar, 
+     color.new(color.orange, 0), size=size.tiny)
+plotshape(show_cvd_div and cvd_div_bull, "CVD Div Bull", shape.xcross, location.belowbar, 
+     color.new(color.orange, 0), size=size.tiny)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████  LOW VOLUME NODE DETECTION  █████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Simple LVN approximation using volume relative to price movement
+// LVN = areas where price moved quickly with low volume (potential breakout zones)
+float vol_per_point = candle_range > 0 ? volume / candle_range : 0
+float avg_vol_per_point = ta.sma(vol_per_point, lvn_lookback)
+
+bool is_lvn_bar = vol_per_point < avg_vol_per_point * lvn_threshold and candle_range > avg_range * 0.8
+
+// Highlight LVN zones
+bgcolor(show_lvn and is_lvn_bar ? lvn_col : na, title="LVN Zone")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████  INFO TABLE  ████████████████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+var table info = table.new(position.bottom_right, 2, 10, 
+     bgcolor=color.new(color.black, 85), border_width=1, border_color=color.new(color.gray, 70))
+
+if barstate.islast
+    // Header
+    table.cell(info, 0, 0, "DEEPFLOW", text_color=color.white, text_size=size.small, 
+         bgcolor=color.new(color.purple, 50))
+    table.cell(info, 1, 0, syminfo.ticker, text_color=color.white, text_size=size.small, 
+         bgcolor=color.new(color.purple, 50))
+    
+    // Delta
+    string delta_str = buy_pct > sell_pct ? str.tostring(buy_pct * 100, "#") + "%B" : str.tostring(sell_pct * 100, "#") + "%S"
+    color delta_col = buy_pct > 0.55 ? color.green : sell_pct > 0.55 ? color.red : color.white
+    table.cell(info, 0, 1, "Delta", text_color=color.white, text_size=size.tiny)
+    table.cell(info, 1, 1, delta_str, text_color=delta_col, text_size=size.tiny)
+    
+    // CVD
+    string cvd_dir = cvd > cvd[1] ? "▲" : "▼"
+    color cvd_col = cvd > cvd[1] ? color.green : color.red
+    table.cell(info, 0, 2, "CVD", text_color=color.white, text_size=size.tiny)
+    table.cell(info, 1, 2, cvd_dir, text_color=cvd_col, text_size=size.tiny)
+    
+    // Volume
+    string vol_str = str.tostring(vol_ratio, "#.#") + "x"
+    color vol_col = vol_ratio > 2.0 ? color.yellow : vol_ratio > 1.3 ? color.green : color.white
+    table.cell(info, 0, 3, "Vol", text_color=color.white, text_size=size.tiny)
+    table.cell(info, 1, 3, vol_str, text_color=vol_col, text_size=size.tiny)
+    
+    // VSA
+    string vsa_str = absorption ? "ABSORB" : strong_buy_effort ? "BUY" : strong_sell_effort ? "SELL" : no_demand ? "NO DEM" : no_supply ? "NO SUP" : "---"
+    color vsa_col = absorption ? col_absorption : strong_buy_effort ? col_effort_buy : strong_sell_effort ? col_effort_sell : color.white
+    table.cell(info, 0, 4, "VSA", text_color=color.white, text_size=size.tiny)
+    table.cell(info, 1, 4, vsa_str, text_color=vsa_col, text_size=size.tiny)
+    
+    // Active FVGs
+    int active_fvg = 0
+    for i = 0 to array.size(fvg_array) - 1
+        FVGData d = array.get(fvg_array, i)
+        if d.state < 3
+            active_fvg += 1
+    table.cell(info, 0, 5, "FVGs", text_color=color.white, text_size=size.tiny)
+    table.cell(info, 1, 5, str.tostring(active_fvg), text_color=color.white, text_size=size.tiny)
+    
+    // Session
+    string sess_str = in_ny_ib ? "NY IB" : in_london_ib ? "LON IB" : "---"
+    color sess_col = in_ny_ib or in_london_ib ? color.yellow : color.white
+    table.cell(info, 0, 6, "Sess", text_color=color.white, text_size=size.tiny)
+    table.cell(info, 1, 6, sess_str, text_color=sess_col, text_size=size.tiny)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████  ALERTS  ████████████████████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+// IB Breakout Alerts
+alertcondition(lon_break_up, "London IB Break Up", "🔵 LONDON IB BREAKOUT UP {{ticker}} @ {{close}}")
+alertcondition(lon_break_dn, "London IB Break Down", "🔵 LONDON IB BREAKOUT DOWN {{ticker}} @ {{close}}")
+alertcondition(ny_break_up, "NY IB Break Up", "🟠 NY IB BREAKOUT UP {{ticker}} @ {{close}}")
+alertcondition(ny_break_dn, "NY IB Break Down", "🟠 NY IB BREAKOUT DOWN {{ticker}} @ {{close}}")
+
+// Stop Run Alerts
+alertcondition(sfp_bear_confirmed, "Stop Run Bear", "🛑 STOP RUN (Bearish SFP) {{ticker}} @ {{close}}")
+alertcondition(sfp_bull_confirmed, "Stop Run Bull", "🛑 STOP RUN (Bullish SFP) {{ticker}} @ {{close}}")
+
+// Iceberg Alerts
+alertcondition(iceberg_bid, "Iceberg Bid", "❄️ ICEBERG (Bid Absorption) {{ticker}} @ {{close}}")
+alertcondition(iceberg_ask, "Iceberg Ask", "❄️ ICEBERG (Ask Absorption) {{ticker}} @ {{close}}")
+
+// VSA Alerts
+alertcondition(absorption, "Absorption", "💜 ABSORPTION DETECTED {{ticker}} @ {{close}}")
+alertcondition(stopping_volume, "Stopping Volume", "🛑 STOPPING VOLUME {{ticker}} @ {{close}}")
+
+// CVD Divergence
+alertcondition(cvd_div_bear, "CVD Bearish Div", "⚠️ CVD BEARISH DIVERGENCE {{ticker}}")
+alertcondition(cvd_div_bull, "CVD Bullish Div", "⚠️ CVD BULLISH DIVERGENCE {{ticker}}")
+
+// VWAP Reactions
+alertcondition(vwap_bounce_bull, "VWAP Bounce Bull", "💜 VWAP BOUNCE (Bull) {{ticker}} @ {{close}}")
+alertcondition(vwap_bounce_bear, "VWAP Bounce Bear", "💜 VWAP BOUNCE (Bear) {{ticker}} @ {{close}}")
+alertcondition(vwap_break_bull, "VWAP Break Bull", "💜 VWAP BREAK (Bull) {{ticker}} @ {{close}}")
+alertcondition(vwap_break_bear, "VWAP Break Bear", "💜 VWAP BREAK (Bear) {{ticker}} @ {{close}}")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████  END OF INDICATOR  ██████████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
