@@ -7,7 +7,7 @@
 // © Alexandro Disla - DeepCharts-Style Implementation
 // ══════════════════════════════════════════════════════════════════════════════
 
-indicator("DeepFlow Ultimate Suite [Institutional Order Flow]", shorttitle="DeepFlow", overlay=true, 
+indicator("GRA - DeepFlow Ultimate Suite [Institutional Order Flow]", shorttitle="GRA DeepFlow", overlay=true, 
      max_lines_count=500, max_boxes_count=500, max_labels_count=500)
 
 // ══════════════════════════════════════════════════════════════════════════════

@@ -10,7 +10,7 @@ indicator("Get_rich_aggressively", shorttitle="GRA", overlay=true, max_labels_co
 // ══════════════════════════════════════════════════════════════════════════════
 
 var float ticksPerPoint = 4.0
-var float tickValue = 0.25
+var float tickValue = 0.25x
 var string instrumentType = "NQ"
 
 if str.contains(str.upper(syminfo.ticker), "NQ") or str.contains(str.upper(syminfo.ticker), "MNQ")
