@@ -1,0 +1,326 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0
+// © Alexandro Disla - Get Rich Aggressively v5 SNIPER
+// Precision Futures Scalping | NQ • ES • YM • GC • BTC
+// SNIPER MODE: Strict filters, fewer signals, higher accuracy
+
+//@version=6
+indicator("GRA v5 SNIPER", shorttitle="GRA5🎯", overlay=true, max_labels_count=200)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████████  INSTRUMENT AUTO-DETECTION  █████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+var float ticksPerPoint = 4.0
+var float tickValue = 0.25
+var string instrumentType = "NQ"
+
+if str.contains(str.upper(syminfo.ticker), "NQ") or str.contains(str.upper(syminfo.ticker), "MNQ")
+    ticksPerPoint := 4.0
+    tickValue := 0.25
+    instrumentType := "NQ"
+else if str.contains(str.upper(syminfo.ticker), "ES") or str.contains(str.upper(syminfo.ticker), "MES")
+    ticksPerPoint := 4.0
+    tickValue := 0.25
+    instrumentType := "ES"
+else if str.contains(str.upper(syminfo.ticker), "YM") or str.contains(str.upper(syminfo.ticker), "MYM")
+    ticksPerPoint := 1.0
+    tickValue := 1.0
+    instrumentType := "YM"
+else if str.contains(str.upper(syminfo.ticker), "GC") or str.contains(str.upper(syminfo.ticker), "MGC")
+    ticksPerPoint := 10.0
+    tickValue := 0.10
+    instrumentType := "GC"
+else if str.contains(str.upper(syminfo.ticker), "BTC")
+    ticksPerPoint := 1.0
+    tickValue := 5.0
+    instrumentType := "BTC"
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████████████  CONFIGURATION  █████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+string GRP_TIER = "═══════════ TIER THRESHOLDS ═══════════"
+float sTierPoints = input.float(100.0, "S-Tier (Points)", minval=10, maxval=500, step=10, group=GRP_TIER,
+     tooltip="100+ pts = Institutional move, HOLD LONGER")
+float aTierPoints = input.float(50.0, "A-Tier (Points)", minval=5, maxval=100, step=5, group=GRP_TIER,
+     tooltip="50-99 pts = Strong move, HOLD A BIT")
+float bTierPoints = input.float(20.0, "B-Tier (Points)", minval=5, maxval=50, step=5, group=GRP_TIER,
+     tooltip="20-49 pts = Quick scalp, CLOSE FAST")
+
+string GRP_SNIPER = "═══════════ SNIPER FILTERS ═══════════"
+float minVolRatio = input.float(1.5, "Min Volume Ratio", minval=1.0, maxval=3.0, step=0.1, group=GRP_SNIPER,
+     tooltip="Volume must be 1.5x average minimum")
+float deltaThreshold = input.float(0.60, "Delta Dominance %", minval=0.55, maxval=0.80, step=0.01, group=GRP_SNIPER,
+     tooltip="60%+ = Clear buyer/seller control")
+float bodyRatio = input.float(0.70, "Min Body Ratio", minval=0.5, maxval=0.9, step=0.05, group=GRP_SNIPER,
+     tooltip="Body must be 70%+ of candle range")
+float rangeMultiplier = input.float(1.3, "Min Range vs Avg", minval=1.0, maxval=2.0, step=0.1, group=GRP_SNIPER,
+     tooltip="Candle range must be 1.3x average")
+bool requireCVDConfirm = input.bool(true, "Require CVD Confirmation", group=GRP_SNIPER,
+     tooltip="CVD direction must match signal")
+string analysisTimeframe = input.timeframe("1", "Intrabar TF", group=GRP_SNIPER)
+
+string GRP_SESSION = "═══════════ SESSION SETTINGS ═══════════"
+bool onlyKeySession = input.bool(true, "Only Signal in Key Sessions", group=GRP_SESSION)
+string sessionTimezone = input.string("America/New_York", "Timezone", 
+     options=["America/New_York", "America/Chicago", "Europe/London", "UTC"], group=GRP_SESSION)
+string londonWindow = input.string("0300-0500", "London Window", group=GRP_SESSION)
+string nyWindow = input.string("0930-1130", "NY Window", group=GRP_SESSION)
+
+string GRP_VISUAL = "═══════════ COLORS ═══════════"
+color sTierColor = input.color(color.new(#FFD700, 0), "S-Tier (Gold)", group=GRP_VISUAL)
+color aTierColor = input.color(color.new(#00E676, 0), "A-Tier (Green)", group=GRP_VISUAL)
+color bTierColor = input.color(color.new(#FFC107, 0), "B-Tier (Yellow)", group=GRP_VISUAL)
+color longColor = input.color(color.new(#00E676, 0), "Long", group=GRP_VISUAL)
+color shortColor = input.color(color.new(#FF5252, 0), "Short", group=GRP_VISUAL)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ██████████████████████████  CANDLE STRUCTURE  ████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+float bodyHigh = math.max(open, close)
+float bodyLow = math.min(open, close)
+float bodySize = bodyHigh - bodyLow
+float candleRange = high - low
+float upperWick = high - bodyHigh
+float lowerWick = bodyLow - low
+
+float candlePoints = candleRange / tickValue / ticksPerPoint
+
+bool isBullish = close > open
+bool isBearish = close < open
+
+float avgRange = ta.sma(candleRange, 20)
+float avgVol = ta.sma(volume, 20)
+float volRatio = avgVol > 0 ? volume / avgVol : 1.0
+
+// ══════════════════════════════════════════════════════════════════════════════
+// █████████████████████  SNIPER QUALITY FILTERS  ███████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Body dominance - no doji or spinning tops
+float currentBodyRatio = candleRange > 0 ? bodySize / candleRange : 0
+bool hasStrongBody = currentBodyRatio >= bodyRatio
+
+// Range significance - must be bigger than average
+bool hasSignificantRange = candleRange >= avgRange * rangeMultiplier
+
+// Volume confirmation
+bool hasVolume = volRatio >= minVolRatio
+
+// Wick analysis - small opposite wick for conviction
+bool bullWickOK = isBullish ? (upperWick < bodySize * 0.5) : true
+bool bearWickOK = isBearish ? (lowerWick < bodySize * 0.5) : true
+bool wicksOK = bullWickOK and bearWickOK
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████████  TIER CLASSIFICATION  ███████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+string tier = candlePoints >= sTierPoints ? "S" : candlePoints >= aTierPoints ? "A" : candlePoints >= bTierPoints ? "B" : "X"
+bool isTiered = tier != "X"
+bool isTierS = tier == "S"
+bool isTierA = tier == "A"
+bool isTierB = tier == "B"
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ███████████████████  INTRABAR DELTA ANALYSIS (CVD)  ██████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+var float buyVol = 0.0
+var float sellVol = 0.0
+var float cvd = 0.0
+
+if timeframe.isintraday
+    [ltfO, ltfC, ltfV, ltfH, ltfL] = request.security_lower_tf(syminfo.tickerid, analysisTimeframe, [open, close, volume, high, low])
+    
+    if array.size(ltfC) > 0
+        float tBuy = 0.0
+        float tSell = 0.0
+        
+        for i = 0 to array.size(ltfC) - 1
+            float r = array.get(ltfH, i) - array.get(ltfL, i)
+            float c = array.get(ltfC, i)
+            float o = array.get(ltfO, i)
+            float v = array.get(ltfV, i)
+            
+            if r > 0
+                float buyPctCalc = (c - array.get(ltfL, i)) / r
+                tBuy += buyPctCalc * v
+                tSell += (1 - buyPctCalc) * v
+            else
+                if c >= o
+                    tBuy += v
+                else
+                    tSell += v
+        
+        buyVol := tBuy
+        sellVol := tSell
+    else
+        float closePos = candleRange > 0 ? (close - low) / candleRange : 0.5
+        buyVol := closePos * volume
+        sellVol := (1 - closePos) * volume
+else
+    float closePos = candleRange > 0 ? (close - low) / candleRange : 0.5
+    buyVol := closePos * volume
+    sellVol := (1 - closePos) * volume
+
+// Update CVD
+float barDelta = buyVol - sellVol
+cvd := cvd + barDelta
+
+float totalVol = buyVol + sellVol
+float buyPct = totalVol > 0 ? buyVol / totalVol : 0.5
+float sellPct = totalVol > 0 ? sellVol / totalVol : 0.5
+
+// STRICT delta dominance
+bool buyDominant = buyPct >= deltaThreshold
+bool sellDominant = sellPct >= deltaThreshold
+
+// CVD trend confirmation
+float cvdMA = ta.sma(cvd, 5)
+bool cvdBullish = cvd > cvdMA
+bool cvdBearish = cvd < cvdMA
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████████  SESSION DETECTION  █████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+bool inLondon = not na(time(timeframe.period, londonWindow, sessionTimezone))
+bool inNY = not na(time(timeframe.period, nyWindow, sessionTimezone))
+bool inSession = inLondon or inNY
+bool sessionOK = onlyKeySession ? inSession : true
+
+bool londonStart = na(time(timeframe.period, londonWindow, sessionTimezone)[1]) and inLondon and timeframe.isintraday
+bool nyStart = na(time(timeframe.period, nyWindow, sessionTimezone)[1]) and inNY and timeframe.isintraday
+
+// ══════════════════════════════════════════════════════════════════════════════
+// █████████████████  SNIPER SIGNAL GENERATION  █████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Direction with delta confirmation
+bool confirmedLong = isBullish and buyDominant
+bool confirmedShort = isBearish and sellDominant
+
+// CVD confirmation (optional but recommended)
+bool cvdConfirmLong = not requireCVDConfirm or cvdBullish
+bool cvdConfirmShort = not requireCVDConfirm or cvdBearish
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ALL CONDITIONS MUST BE TRUE FOR SNIPER SIGNAL:
+// 1. Tiered (minimum point movement)
+// 2. Volume (1.5x+ average)
+// 3. Delta (60%+ dominance)
+// 4. Body (70%+ of range)
+// 5. Range (1.3x+ average)
+// 6. Wicks (small opposite wick)
+// 7. CVD (trending with signal)
+// 8. Session (London or NY open)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+bool longSignal = isTiered and hasVolume and confirmedLong and hasStrongBody and hasSignificantRange and wicksOK and cvdConfirmLong and sessionOK
+bool shortSignal = isTiered and hasVolume and confirmedShort and hasStrongBody and hasSignificantRange and wicksOK and cvdConfirmShort and sessionOK
+
+bool sLong = longSignal and isTierS
+bool aLong = longSignal and isTierA
+bool bLong = longSignal and isTierB
+
+bool sShort = shortSignal and isTierS
+bool aShort = shortSignal and isTierA
+bool bShort = shortSignal and isTierB
+
+// ══════════════════════════════════════════════════════════════════════════════
+// █████████████████████████████  VISUALIZATION  ████████████████████████════════
+// ══════════════════════════════════════════════════════════════════════════════
+
+color tierCol = isTierS ? sTierColor : isTierA ? aTierColor : isTierB ? bTierColor : na
+
+// Long Signals - Only SNIPER quality
+plotshape(sLong, "S Long", shape.triangleup, location.belowbar, sTierColor, size=size.normal, text="S🎯", textcolor=color.white)
+plotshape(aLong, "A Long", shape.triangleup, location.belowbar, aTierColor, size=size.small, text="A🎯", textcolor=color.white)
+plotshape(bLong, "B Long", shape.triangleup, location.belowbar, bTierColor, size=size.tiny, text="B🎯", textcolor=color.white)
+
+// Short Signals - Only SNIPER quality
+plotshape(sShort, "S Short", shape.triangledown, location.abovebar, sTierColor, size=size.normal, text="S🎯", textcolor=color.white)
+plotshape(aShort, "A Short", shape.triangledown, location.abovebar, aTierColor, size=size.small, text="A🎯", textcolor=color.white)
+plotshape(bShort, "B Short", shape.triangledown, location.abovebar, bTierColor, size=size.tiny, text="B🎯", textcolor=color.white)
+
+// Session Markers
+plotshape(londonStart, "LDN", shape.diamond, location.abovebar, color.new(#2196F3, 0), size=size.tiny, text="L", textcolor=color.white)
+plotshape(nyStart, "NY", shape.diamond, location.abovebar, color.new(#4CAF50, 0), size=size.tiny, text="N", textcolor=color.white)
+
+// Session backgrounds
+bgcolor(inLondon ? color.new(#2196F3, 96) : na, title="London BG")
+bgcolor(inNY ? color.new(#4CAF50, 96) : na, title="NY BG")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████████████  INFO TABLE  ████████████████████████████════════
+// ══════════════════════════════════════════════════════════════════════════════
+
+var table panel = table.new(position.top_right, 2, 8, bgcolor=color.new(color.black, 10), border_width=1, border_color=color.new(#333333, 0))
+
+if barstate.islast
+    // Header
+    table.cell(panel, 0, 0, "GRA5", text_color=color.white, text_size=size.small, bgcolor=color.new(#FFD700, 30))
+    table.cell(panel, 1, 0, "🎯" + instrumentType, text_color=color.white, text_size=size.small, bgcolor=color.new(#FFD700, 30))
+    
+    // Points & Tier
+    table.cell(panel, 0, 1, "Pts", text_color=color.white, text_size=size.tiny)
+    table.cell(panel, 1, 1, str.tostring(candlePoints, "#.#"), text_color=tierCol, text_size=size.tiny)
+    
+    table.cell(panel, 0, 2, "Tier", text_color=color.white, text_size=size.tiny)
+    table.cell(panel, 1, 2, tier, text_color=tierCol, text_size=size.tiny)
+    
+    // Volume
+    color vCol = hasVolume ? color.green : color.red
+    table.cell(panel, 0, 3, "Vol", text_color=color.white, text_size=size.tiny)
+    table.cell(panel, 1, 3, str.tostring(volRatio, "#.#") + "x", text_color=vCol, text_size=size.tiny)
+    
+    // Delta
+    string dStr = buyPct > sellPct ? str.tostring(buyPct * 100, "#") + "%B" : str.tostring(sellPct * 100, "#") + "%S"
+    color dCol = buyDominant ? longColor : sellDominant ? shortColor : color.white
+    table.cell(panel, 0, 4, "Delta", text_color=color.white, text_size=size.tiny)
+    table.cell(panel, 1, 4, dStr, text_color=dCol, text_size=size.tiny)
+    
+    // Body Ratio
+    color bCol = hasStrongBody ? color.green : color.red
+    table.cell(panel, 0, 5, "Body", text_color=color.white, text_size=size.tiny)
+    table.cell(panel, 1, 5, str.tostring(currentBodyRatio * 100, "#") + "%", text_color=bCol, text_size=size.tiny)
+    
+    // CVD
+    string cvdDir = cvdBullish ? "▲" : "▼"
+    color cvdCol = cvdBullish ? longColor : shortColor
+    table.cell(panel, 0, 6, "CVD", text_color=color.white, text_size=size.tiny)
+    table.cell(panel, 1, 6, cvdDir, text_color=cvdCol, text_size=size.tiny)
+    
+    // Session
+    string sStr = inNY ? "NY!" : inLondon ? "LDN!" : "---"
+    color sCol = inSession ? color.yellow : color.gray
+    table.cell(panel, 0, 7, "Sess", text_color=color.white, text_size=size.tiny)
+    table.cell(panel, 1, 7, sStr, text_color=sCol, text_size=size.tiny)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ██████████████████████████████  ALERTS  ══════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+
+alertcondition(sLong, title="🎯 S-TIER LONG", message="🎯🥇 SNIPER S-TIER LONG {{ticker}} @ {{close}}")
+alertcondition(aLong, title="🎯 A-TIER LONG", message="🎯🥈 SNIPER A-TIER LONG {{ticker}} @ {{close}}")
+alertcondition(bLong, title="🎯 B-TIER LONG", message="🎯🥉 SNIPER B-TIER LONG {{ticker}} @ {{close}}")
+
+alertcondition(sShort, title="🎯 S-TIER SHORT", message="🎯🥇 SNIPER S-TIER SHORT {{ticker}} @ {{close}}")
+alertcondition(aShort, title="🎯 A-TIER SHORT", message="🎯🥈 SNIPER A-TIER SHORT {{ticker}} @ {{close}}")
+alertcondition(bShort, title="🎯 B-TIER SHORT", message="🎯🥉 SNIPER B-TIER SHORT {{ticker}} @ {{close}}")
+
+alertcondition(londonStart, title="LONDON OPEN", message="London Open - {{ticker}}")
+alertcondition(nyStart, title="NY OPEN", message="NY Open - {{ticker}}")
+
+if longSignal or shortSignal
+    string t = tier
+    string d = longSignal ? "LONG" : "SHORT"
+    string act = isTierS ? "HOLD" : isTierA ? "SWING" : "SCALP"
+    string deltaInfo = longSignal ? str.tostring(buyPct * 100, "#") + "%B" : str.tostring(sellPct * 100, "#") + "%S"
+    alert("🎯 GRA5 " + t + "-" + d + " | " + syminfo.ticker + " @ " + str.tostring(close, format.mintick) + " | " + deltaInfo + " | " + act, alert.freq_once_per_bar_close)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// █████████████████████████  END OF INDICATOR  █████████════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
