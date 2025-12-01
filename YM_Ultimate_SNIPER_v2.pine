@@ -512,9 +512,7 @@ bool validBullFVG = fvgBullRaw and gapSizeOK_Bull and impulseOK_Bull and zoneVol
 bool validBearFVG = fvgBearRaw and gapSizeOK_Bear and impulseOK_Bear and zoneVolumeOK and deltaOK_Bear and sessionOK
 
 // Single Print Detection
-bool isSniperImpulse = (candleRange > avgRange * zoneImpulseMultiplier) and 
-                        (currentBodyRatio >= bodyRatio) and 
-                        (volRatio >= minVolRatio)
+bool isSniperImpulse = (candleRange > avgRange * zoneImpulseMultiplier) and (currentBodyRatio >= bodyRatio) and (volRatio >= minVolRatio)
 bool sniperSinglePrint = isSniperImpulse and ((isBullish and buyDominant) or (isBearish and sellDominant)) and sessionOK
 
 // ══════════════════════════════════════════════════════════════════════════════
