@@ -1,0 +1,1080 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0
+// © Alexandro Disla - YM Ultimate SNIPER v6
+// ORDERFLOW EDITION | Order Blocks + Liquidity Sweeps + IFVG
+// TARGET: 3-7 High-Confluence Trades per Day
+// "Zones That Matter" Philosophy
+
+//@version=6
+indicator("YM Ultimate SNIPER v6", shorttitle="YM🎯v6", overlay=true, 
+     max_labels_count=500, max_boxes_count=500, max_lines_count=500)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████████  CONSTANTS & INSTRUMENT  ███████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+var float TICK_VALUE = syminfo.mintick
+var int EXTEND_BARS = 500
+
+// Auto-detect instrument for proper tier thresholds
+var string INSTRUMENT = syminfo.ticker
+var bool IS_YM = str.contains(INSTRUMENT, "YM") or str.contains(INSTRUMENT, "MYM")
+var bool IS_NQ = str.contains(INSTRUMENT, "NQ") or str.contains(INSTRUMENT, "MNQ")
+var bool IS_ES = str.contains(INSTRUMENT, "ES") or str.contains(INSTRUMENT, "MES")
+var bool IS_GC = str.contains(INSTRUMENT, "GC") or str.contains(INSTRUMENT, "MGC")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████████████  CONFIGURATION  █████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+string GRP_TIER = "═══════════ TIER THRESHOLDS ═══════════"
+float sTierPoints = input.float(50.0, "S-Tier (Points)", minval=20, maxval=200, step=5, group=GRP_TIER,
+     tooltip="S-Tier: HOLD position (institutional sweep)")
+float aTierPoints = input.float(25.0, "A-Tier (Points)", minval=10, maxval=100, step=5, group=GRP_TIER,
+     tooltip="A-Tier: SWING trade (strong momentum)")
+float bTierPoints = input.float(12.0, "B-Tier (Points)", minval=5, maxval=50, step=1, group=GRP_TIER,
+     tooltip="B-Tier: SCALP quick (quick grab)")
+
+string GRP_SNIPER = "═══════════ SNIPER FILTERS ═══════════"
+float minVolRatio = input.float(1.8, "Min Volume Ratio", minval=1.0, maxval=3.0, step=0.1, group=GRP_SNIPER)
+float deltaThreshold = input.float(0.62, "Delta Dominance %", minval=0.55, maxval=0.80, step=0.01, group=GRP_SNIPER)
+float bodyRatio = input.float(0.70, "Min Body Ratio", minval=0.5, maxval=0.9, step=0.02, group=GRP_SNIPER)
+float rangeMultiplier = input.float(1.3, "Min Range vs Avg", minval=1.0, maxval=2.5, step=0.1, group=GRP_SNIPER)
+bool requireCVDConfirm = input.bool(true, "Require CVD Confirmation", group=GRP_SNIPER)
+
+string GRP_SESSION = "═══════════ SESSION WINDOWS ═══════════"
+bool onlyKeySession = input.bool(true, "Only Signal in Key Sessions", group=GRP_SESSION)
+string sessionTimezone = input.string("America/New_York", "Timezone", 
+     options=["America/New_York", "America/Chicago", "Europe/London", "UTC"], group=GRP_SESSION)
+string londonWindow = input.string("0300-0500", "London Window", group=GRP_SESSION)
+string nyWindow = input.string("0930-1130", "NY Open Window", group=GRP_SESSION)
+string nyPowerHour = input.string("1500-1600", "NY Power Hour", group=GRP_SESSION)
+bool includePowerHour = input.bool(true, "Include Power Hour", group=GRP_SESSION)
+
+string GRP_OB = "═══════════ ORDER BLOCKS ═══════════"
+bool showOrderBlocks = input.bool(true, "Show Order Blocks", group=GRP_OB)
+int obLookback = input.int(20, "OB Lookback Bars", minval=10, maxval=50, group=GRP_OB)
+float obMinStrength = input.float(1.5, "OB Min Move Strength (ATR)", minval=1.0, maxval=3.0, step=0.1, group=GRP_OB,
+     tooltip="Minimum move after OB candle in ATR multiples")
+int maxOrderBlocks = input.int(8, "Max Active Order Blocks", minval=3, maxval=15, group=GRP_OB)
+
+string GRP_LIQ = "═══════════ LIQUIDITY SWEEPS ═══════════"
+bool showLiqSweeps = input.bool(true, "Show Liquidity Sweeps", group=GRP_LIQ)
+int swingLookback = input.int(15, "Swing Lookback", minval=5, maxval=50, group=GRP_LIQ)
+float sweepMinWick = input.float(0.3, "Min Sweep Wick Ratio", minval=0.15, maxval=0.6, step=0.05, group=GRP_LIQ,
+     tooltip="Minimum wick size showing rejection")
+int maxSweepAge = input.int(3, "Max Sweep Signal Age (bars)", minval=1, maxval=10, group=GRP_LIQ)
+
+string GRP_ZONES = "═══════════ FVG & IFVG ZONES ═══════════"
+bool showFVG = input.bool(true, "Show FVG Zones", group=GRP_ZONES)
+bool showIFVG = input.bool(true, "Show IFVG (Inverse FVG)", group=GRP_ZONES)
+float minGapATR = input.float(0.25, "Min Gap Size (ATR%)", minval=0.1, maxval=0.8, step=0.05, group=GRP_ZONES)
+int maxZoneAge = input.int(75, "Max Zone Age (bars)", minval=30, maxval=200, group=GRP_ZONES)
+int maxZones = input.int(10, "Max Active Zones", minval=5, maxval=20, group=GRP_ZONES)
+float zoneQualityMin = input.float(6.0, "Min Zone Quality Score", minval=3.0, maxval=9.0, step=0.5, group=GRP_ZONES,
+     tooltip="Only show zones that score above this threshold (max 10)")
+
+string GRP_CONFLUENCE = "═══════════ CONFLUENCE SCORING ═══════════"
+float minScoreWeak = input.float(4.5, "Min Score: Medium", minval=2.0, maxval=6.0, step=0.5, group=GRP_CONFLUENCE,
+     tooltip="Score below this = WEAK (no signal)")
+float minScoreExcellent = input.float(7.0, "Min Score: Excellent", minval=5.0, maxval=9.0, step=0.5, group=GRP_CONFLUENCE,
+     tooltip="Score at or above this = EXCELLENT")
+
+string GRP_COLORS = "═══════════ COLORS ═══════════"
+color sTierColor = input.color(color.new(#FFD700, 0), "S-Tier (Gold)", group=GRP_COLORS)
+color aTierColor = input.color(color.new(#00E676, 0), "A-Tier (Green)", group=GRP_COLORS)
+color bTierColor = input.color(color.new(#FFC107, 0), "B-Tier (Amber)", group=GRP_COLORS)
+color bullFVGColor = input.color(color.new(#00E676, 80), "Bullish FVG", group=GRP_COLORS)
+color bearFVGColor = input.color(color.new(#FF5252, 80), "Bearish FVG", group=GRP_COLORS)
+color bullOBColor = input.color(color.new(#2196F3, 75), "Bullish OB", group=GRP_COLORS)
+color bearOBColor = input.color(color.new(#E91E63, 75), "Bearish OB", group=GRP_COLORS)
+color ifvgColor = input.color(color.new(#9C27B0, 70), "IFVG", group=GRP_COLORS)
+color sweepBullColor = input.color(color.new(#00BCD4, 0), "Bullish Sweep", group=GRP_COLORS)
+color sweepBearColor = input.color(color.new(#FF9800, 0), "Bearish Sweep", group=GRP_COLORS)
+
+string GRP_TABLE = "═══════════ TABLE DISPLAY ═══════════"
+string tableSize = input.string("normal", "Table Size", options=["tiny", "small", "normal", "large"], group=GRP_TABLE)
+string tablePos = input.string("Top Right", "Table Position", 
+     options=["Top Right", "Top Left", "Bottom Right", "Bottom Left", "Top Center", "Bottom Center"], group=GRP_TABLE)
+int tableTransparency = input.int(5, "Table Background Transparency", minval=0, maxval=50, group=GRP_TABLE)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ██████████████████████████  CANDLE STRUCTURE  ████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+float bodyHigh = math.max(open, close)
+float bodyLow = math.min(open, close)
+float bodySize = bodyHigh - bodyLow
+float candleRange = high - low
+float upperWick = high - bodyHigh
+float lowerWick = bodyLow - low
+
+// Points calculation
+float candlePoints = candleRange / syminfo.mintick
+if IS_NQ
+    candlePoints := candleRange / 0.25  // NQ: 4 ticks per point
+else if IS_YM
+    candlePoints := candleRange / 1.0   // YM: 1 tick per point
+else if IS_ES
+    candlePoints := candleRange / 0.25  // ES: 4 ticks per point
+else if IS_GC
+    candlePoints := candleRange / 0.10  // GC: 10 ticks per point
+
+bool isBullish = close > open
+bool isBearish = close < open
+
+float avgRange = ta.sma(candleRange, 20)
+float avgVol = ta.sma(volume, 20)
+float volRatio = avgVol > 0 ? volume / avgVol : 1.0
+float atr = ta.atr(14)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// █████████████████████  QUALITY FILTERS  ██████████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+float currentBodyRatio = candleRange > 0 ? bodySize / candleRange : 0
+bool hasStrongBody = currentBodyRatio >= bodyRatio
+bool hasSignificantRange = candleRange >= avgRange * rangeMultiplier
+bool hasVolume = volRatio >= minVolRatio
+bool hasStrongVolume = volRatio >= 2.0
+bool hasExtremeVolume = volRatio >= 2.5
+
+// Wick analysis for rejection detection
+float upperWickRatio = candleRange > 0 ? upperWick / candleRange : 0
+float lowerWickRatio = candleRange > 0 ? lowerWick / candleRange : 0
+bool hasUpperRejection = upperWickRatio >= sweepMinWick
+bool hasLowerRejection = lowerWickRatio >= sweepMinWick
+
+bool bullWickOK = isBullish ? (upperWick < bodySize * 0.5) : true
+bool bearWickOK = isBearish ? (lowerWick < bodySize * 0.5) : true
+bool wicksOK = bullWickOK and bearWickOK
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████████  TIER CLASSIFICATION  ███████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+string tier = candlePoints >= sTierPoints ? "S" : candlePoints >= aTierPoints ? "A" : candlePoints >= bTierPoints ? "B" : "X"
+bool isTiered = tier != "X"
+bool isTierS = tier == "S"
+bool isTierA = tier == "A"
+bool isTierB = tier == "B"
+
+float tierScore = isTierS ? 3.0 : isTierA ? 2.0 : isTierB ? 1.0 : 0.0
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████████  SESSION DETECTION  █████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+bool inLondon = not na(time(timeframe.period, londonWindow, sessionTimezone))
+bool inNY = not na(time(timeframe.period, nyWindow, sessionTimezone))
+bool inPowerHour = includePowerHour ? not na(time(timeframe.period, nyPowerHour, sessionTimezone)) : false
+bool inSession = inLondon or inNY or inPowerHour
+bool sessionOK = onlyKeySession ? inSession : true
+
+bool londonStart = na(time(timeframe.period, londonWindow, sessionTimezone)[1]) and inLondon and timeframe.isintraday
+bool nyStart = na(time(timeframe.period, nyWindow, sessionTimezone)[1]) and inNY and timeframe.isintraday
+bool powerHourStart = includePowerHour and na(time(timeframe.period, nyPowerHour, sessionTimezone)[1]) and inPowerHour and timeframe.isintraday
+
+string currentSession = inNY ? "NY" : inLondon ? "LDN" : inPowerHour ? "PWR" : "OFF"
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████  DELTA ANALYSIS (ORDERFLOW)  ████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Enhanced delta estimation using price position within range
+float rng = high - low
+float closePosition = rng > 0 ? (close - low) / rng : 0.5
+float openPosition = rng > 0 ? (open - low) / rng : 0.5
+
+// Buy volume = volume * how much price moved up from low
+// Sell volume = volume * how much price moved down from high
+float buyVol = volume * closePosition
+float sellVol = volume * (1 - closePosition)
+
+// Adjust for candle direction bias
+if isBullish
+    buyVol := buyVol * 1.15  // Bullish candles have more buying
+    sellVol := sellVol * 0.85
+else if isBearish
+    sellVol := sellVol * 1.15  // Bearish candles have more selling
+    buyVol := buyVol * 0.85
+
+var float cvd = 0.0
+float barDelta = buyVol - sellVol
+cvd := cvd + barDelta
+
+float totalVol = buyVol + sellVol
+float buyPct = totalVol > 0 ? buyVol / totalVol : 0.5
+float sellPct = totalVol > 0 ? sellVol / totalVol : 0.5
+
+bool buyDominant = buyPct >= deltaThreshold
+bool sellDominant = sellPct >= deltaThreshold
+bool strongDelta = buyPct >= 0.70 or sellPct >= 0.70
+bool extremeDelta = buyPct >= 0.78 or sellPct >= 0.78
+
+// CVD analysis
+float cvdMA = ta.sma(cvd, 5)
+float cvdSlope = cvd - cvd[3]
+bool cvdBullish = cvd > cvdMA and cvdSlope > 0
+bool cvdBearish = cvd < cvdMA and cvdSlope < 0
+bool cvdStrongBull = cvdBullish and cvdSlope > ta.stdev(cvdSlope, 10)
+bool cvdStrongBear = cvdBearish and cvdSlope < -ta.stdev(cvdSlope, 10)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ███████████████████  SWING HIGH/LOW DETECTION  ███████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Find swing highs and lows for liquidity sweep detection
+var array<float> swingHighs = array.new<float>()
+var array<int> swingHighBars = array.new<int>()
+var array<float> swingLows = array.new<float>()
+var array<int> swingLowBars = array.new<int>()
+
+// Swing high: high is higher than surrounding bars
+bool isSwingHigh = high[2] > high[3] and high[2] > high[4] and high[2] > high[1] and high[2] > high[0]
+bool isSwingLow = low[2] < low[3] and low[2] < low[4] and low[2] < low[1] and low[2] < low[0]
+
+if isSwingHigh and barstate.isconfirmed
+    array.push(swingHighs, high[2])
+    array.push(swingHighBars, bar_index - 2)
+    // Keep limited history
+    if array.size(swingHighs) > 20
+        array.shift(swingHighs)
+        array.shift(swingHighBars)
+
+if isSwingLow and barstate.isconfirmed
+    array.push(swingLows, low[2])
+    array.push(swingLowBars, bar_index - 2)
+    if array.size(swingLows) > 20
+        array.shift(swingLows)
+        array.shift(swingLowBars)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// █████████████████  LIQUIDITY SWEEP DETECTION  ████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Liquidity sweep = price sweeps a swing level then rejects (traps traders)
+var int lastBullSweepBar = 0
+var int lastBearSweepBar = 0
+var float lastBullSweepLevel = na
+var float lastBearSweepLevel = na
+
+bool bullishSweep = false  // Sweep lows + reject up = bullish
+bool bearishSweep = false  // Sweep highs + reject down = bearish
+
+// Check for bearish sweep (sweep high, reject down)
+if array.size(swingHighs) > 0
+    for i = array.size(swingHighs) - 1 to math.max(0, array.size(swingHighs) - 5)
+        float swingLevel = array.get(swingHighs, i)
+        int swingBar = array.get(swingHighBars, i)
+        int barsAgo = bar_index - swingBar
+        
+        // Conditions: swept above swing high, then closed back below with upper wick
+        if barsAgo >= 3 and barsAgo <= swingLookback
+            if high > swingLevel and close < swingLevel and hasUpperRejection and sellDominant
+                bearishSweep := true
+                lastBearSweepBar := bar_index
+                lastBearSweepLevel := swingLevel
+                break
+
+// Check for bullish sweep (sweep low, reject up)
+if array.size(swingLows) > 0
+    for i = array.size(swingLows) - 1 to math.max(0, array.size(swingLows) - 5)
+        float swingLevel = array.get(swingLows, i)
+        int swingBar = array.get(swingLowBars, i)
+        int barsAgo = bar_index - swingBar
+        
+        // Conditions: swept below swing low, then closed back above with lower wick
+        if barsAgo >= 3 and barsAgo <= swingLookback
+            if low < swingLevel and close > swingLevel and hasLowerRejection and buyDominant
+                bullishSweep := true
+                lastBullSweepBar := bar_index
+                lastBullSweepLevel := swingLevel
+                break
+
+// Track recent sweeps for confluence
+bool recentBullSweep = (bar_index - lastBullSweepBar) <= maxSweepAge
+bool recentBearSweep = (bar_index - lastBearSweepBar) <= maxSweepAge
+
+// ══════════════════════════════════════════════════════════════════════════════
+// █████████████████████  ORDER BLOCK DETECTION  ████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Order Block UDT
+type OrderBlock
+    float priceTop
+    float priceBottom
+    bool isBullish
+    int barIdx
+    int state        // 0=fresh, 1=tested, 2=mitigated
+    float strength   // Quality score
+    bool hasBeenSwept
+
+var array<OrderBlock> orderBlocks = array.new<OrderBlock>()
+var array<box> obBoxes = array.new<box>()
+
+// Detect Bullish Order Block: Last bearish candle before significant bullish move
+// This is where institutions placed buy orders (absorbed selling)
+bool bullOBCondition = false
+float bullOBTop = na
+float bullOBBottom = na
+float bullOBStrength = 0.0
+
+if barstate.isconfirmed and bar_index > obLookback
+    // Look for pattern: bearish candle followed by strong bullish move
+    if close[1] < open[1]  // Previous candle was bearish
+        // Calculate the move after this bearish candle
+        float moveAfter = close - close[1]
+        float moveATR = moveAfter / atr
+        
+        // Check if move is strong enough
+        if moveATR >= obMinStrength and isBullish and hasVolume
+            bullOBCondition := true
+            bullOBTop := high[1]
+            bullOBBottom := low[1]
+            
+            // Calculate OB strength score
+            float obVolRatio = volume[1] / avgVol
+            float obBodyRatio = math.abs(close[1] - open[1]) / (high[1] - low[1])
+            bullOBStrength := math.min(10, moveATR * 2 + obVolRatio + (obBodyRatio * 2))
+
+// Detect Bearish Order Block: Last bullish candle before significant bearish move
+bool bearOBCondition = false
+float bearOBTop = na
+float bearOBBottom = na
+float bearOBStrength = 0.0
+
+if barstate.isconfirmed and bar_index > obLookback
+    if close[1] > open[1]  // Previous candle was bullish
+        float moveAfter = close[1] - close
+        float moveATR = moveAfter / atr
+        
+        if moveATR >= obMinStrength and isBearish and hasVolume
+            bearOBCondition := true
+            bearOBTop := high[1]
+            bearOBBottom := low[1]
+            
+            float obVolRatio = volume[1] / avgVol
+            float obBodyRatio = math.abs(close[1] - open[1]) / (high[1] - low[1])
+            bearOBStrength := math.min(10, moveATR * 2 + obVolRatio + (obBodyRatio * 2))
+
+// Create Order Block visuals
+if showOrderBlocks and bullOBCondition and bullOBStrength >= 4
+    OrderBlock newOB = OrderBlock.new()
+    newOB.priceTop := bullOBTop
+    newOB.priceBottom := bullOBBottom
+    newOB.isBullish := true
+    newOB.barIdx := bar_index - 1
+    newOB.state := 0
+    newOB.strength := bullOBStrength
+    newOB.hasBeenSwept := false
+    
+    box obBox = box.new(
+         left=bar_index - 1,
+         top=bullOBTop,
+         right=bar_index + EXTEND_BARS,
+         bottom=bullOBBottom,
+         border_color=color.new(#2196F3, 50),
+         bgcolor=bullOBColor,
+         border_width=2,
+         border_style=line.style_solid)
+    
+    array.push(orderBlocks, newOB)
+    array.push(obBoxes, obBox)
+
+if showOrderBlocks and bearOBCondition and bearOBStrength >= 4
+    OrderBlock newOB = OrderBlock.new()
+    newOB.priceTop := bearOBTop
+    newOB.priceBottom := bearOBBottom
+    newOB.isBullish := false
+    newOB.barIdx := bar_index - 1
+    newOB.state := 0
+    newOB.strength := bearOBStrength
+    newOB.hasBeenSwept := false
+    
+    box obBox = box.new(
+         left=bar_index - 1,
+         top=bearOBTop,
+         right=bar_index + EXTEND_BARS,
+         bottom=bearOBBottom,
+         border_color=color.new(#E91E63, 50),
+         bgcolor=bearOBColor,
+         border_width=2,
+         border_style=line.style_solid)
+    
+    array.push(orderBlocks, newOB)
+    array.push(obBoxes, obBox)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// █████████████████  FVG & IFVG ZONE DETECTION  ████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Zone UDT with quality scoring
+type FVGZone
+    float priceTop
+    float priceBottom
+    bool isBullish
+    int barIdx
+    int state          // 0=fresh, 1=tested, 2=broken
+    float quality      // Zone quality score
+    bool isIFVG        // Is this an Inverse FVG?
+    bool alignedWithOB // Does this align with an order block?
+
+var array<FVGZone> fvgZones = array.new<FVGZone>()
+var array<box> fvgBoxes = array.new<box>()
+var array<line> fvgLines = array.new<line>()
+
+// Standard FVG Detection
+bool fvgBullRaw = low > high[2]
+bool fvgBearRaw = high < low[2]
+
+float bullGapSize = fvgBullRaw ? (low - high[2]) : 0
+float bearGapSize = fvgBearRaw ? (low[2] - high) : 0
+
+bool gapSizeOK_Bull = bullGapSize >= atr * minGapATR
+bool gapSizeOK_Bear = bearGapSize >= atr * minGapATR
+
+// Impulse quality for FVG
+float prevBodyRatio = (high[1] - low[1]) > 0 ? math.abs(close[1] - open[1]) / (high[1] - low[1]) : 0
+float impulseStrength = candleRange[1] / avgRange
+bool impulseOK = impulseStrength >= 1.3 and prevBodyRatio >= 0.65
+
+// Calculate FVG Zone Quality Score (max 10)
+calcFVGQuality(float gapSize, float impulseStr, float volR, bool hasOBAlign, bool inSess) =>
+    float q = 0.0
+    q += math.min(2.5, (gapSize / atr) * 5)           // Gap size contribution
+    q += math.min(2.5, (impulseStr - 1) * 2)          // Impulse strength
+    q += math.min(2.0, (volR - 1) * 1.5)              // Volume quality
+    q += hasOBAlign ? 2.0 : 0.0                        // OB alignment bonus
+    q += inSess ? 1.0 : 0.0                            // Session bonus
+    math.min(10.0, q)
+
+// Check if FVG aligns with any Order Block
+checkOBAlignment(float top, float bottom, bool bullish) =>
+    bool aligned = false
+    if array.size(orderBlocks) > 0
+        for i = 0 to math.min(array.size(orderBlocks) - 1, 10)
+            OrderBlock ob = array.get(orderBlocks, i)
+            if ob.isBullish == bullish
+                // Check price overlap
+                bool overlaps = not (bottom > ob.priceTop or top < ob.priceBottom)
+                if overlaps
+                    aligned := true
+                    break
+    aligned
+
+bool validBullFVG = fvgBullRaw and gapSizeOK_Bull and impulseOK and volume[1] >= avgVol and close[1] > open[1]
+bool validBearFVG = fvgBearRaw and gapSizeOK_Bear and impulseOK and volume[1] >= avgVol and close[1] < open[1]
+
+// IFVG Detection (Inverse FVG - when price reclaims a gap)
+// Bullish IFVG: Price filled a bearish FVG and closed above it
+// Bearish IFVG: Price filled a bullish FVG and closed below it
+var bool ifvgBull = false
+var bool ifvgBear = false
+var float ifvgBullTop = na
+var float ifvgBullBottom = na
+var float ifvgBearTop = na
+var float ifvgBearBottom = na
+
+ifvgBull := false
+ifvgBear := false
+
+// Check existing zones for IFVG conversion
+if array.size(fvgZones) > 0
+    for i = array.size(fvgZones) - 1 to 0
+        if i >= array.size(fvgZones)
+            continue
+        FVGZone zone = array.get(fvgZones, i)
+        
+        // Bearish zone being reclaimed (becomes bullish IFVG)
+        if not zone.isBullish and not zone.isIFVG and zone.state == 1
+            if close > zone.priceTop and buyDominant and hasVolume
+                ifvgBull := true
+                ifvgBullTop := zone.priceTop
+                ifvgBullBottom := zone.priceBottom
+        
+        // Bullish zone being reclaimed (becomes bearish IFVG)
+        if zone.isBullish and not zone.isIFVG and zone.state == 1
+            if close < zone.priceBottom and sellDominant and hasVolume
+                ifvgBear := true
+                ifvgBearTop := zone.priceTop
+                ifvgBearBottom := zone.priceBottom
+
+// ══════════════════════════════════════════════════════════════════════════════
+// █████████████████████  CREATE FVG/IFVG ZONES  ████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+if showFVG and barstate.isconfirmed
+    // Create Bullish FVG
+    if validBullFVG
+        float topPrice = low
+        float bottomPrice = high[2]
+        float entry = (topPrice + bottomPrice) / 2
+        bool obAlign = checkOBAlignment(topPrice, bottomPrice, true)
+        float quality = calcFVGQuality(bullGapSize, impulseStrength, volRatio[1], obAlign, sessionOK)
+        
+        // Only create if quality meets threshold
+        if quality >= zoneQualityMin
+            FVGZone newZone = FVGZone.new()
+            newZone.priceTop := topPrice
+            newZone.priceBottom := bottomPrice
+            newZone.isBullish := true
+            newZone.barIdx := bar_index
+            newZone.state := 0
+            newZone.quality := quality
+            newZone.isIFVG := false
+            newZone.alignedWithOB := obAlign
+            
+            color zoneColor = obAlign ? color.new(#00E676, 70) : bullFVGColor
+            int borderWidth = obAlign ? 2 : 1
+            
+            box zoneBox = box.new(
+                 left=bar_index - 2,
+                 top=topPrice,
+                 right=bar_index + EXTEND_BARS,
+                 bottom=bottomPrice,
+                 border_color=color.new(#00E676, 40),
+                 bgcolor=zoneColor,
+                 border_width=borderWidth)
+            line entryLine = line.new(
+                 x1=bar_index - 2,
+                 y1=entry,
+                 x2=bar_index + EXTEND_BARS,
+                 y2=entry,
+                 color=color.new(#FFFFFF, 60),
+                 style=line.style_dotted,
+                 width=1)
+            
+            array.push(fvgZones, newZone)
+            array.push(fvgBoxes, zoneBox)
+            array.push(fvgLines, entryLine)
+    
+    // Create Bearish FVG
+    if validBearFVG
+        float topPrice = low[2]
+        float bottomPrice = high
+        float entry = (topPrice + bottomPrice) / 2
+        bool obAlign = checkOBAlignment(topPrice, bottomPrice, false)
+        float quality = calcFVGQuality(bearGapSize, impulseStrength, volRatio[1], obAlign, sessionOK)
+        
+        if quality >= zoneQualityMin
+            FVGZone newZone = FVGZone.new()
+            newZone.priceTop := topPrice
+            newZone.priceBottom := bottomPrice
+            newZone.isBullish := false
+            newZone.barIdx := bar_index
+            newZone.state := 0
+            newZone.quality := quality
+            newZone.isIFVG := false
+            newZone.alignedWithOB := obAlign
+            
+            color zoneColor = obAlign ? color.new(#FF5252, 70) : bearFVGColor
+            int borderWidth = obAlign ? 2 : 1
+            
+            box zoneBox = box.new(
+                 left=bar_index - 2,
+                 top=topPrice,
+                 right=bar_index + EXTEND_BARS,
+                 bottom=bottomPrice,
+                 border_color=color.new(#FF5252, 40),
+                 bgcolor=zoneColor,
+                 border_width=borderWidth)
+            line entryLine = line.new(
+                 x1=bar_index - 2,
+                 y1=entry,
+                 x2=bar_index + EXTEND_BARS,
+                 y2=entry,
+                 color=color.new(#FFFFFF, 60),
+                 style=line.style_dotted,
+                 width=1)
+            
+            array.push(fvgZones, newZone)
+            array.push(fvgBoxes, zoneBox)
+            array.push(fvgLines, entryLine)
+
+// Create IFVG zones
+if showIFVG and barstate.isconfirmed
+    if ifvgBull and not na(ifvgBullTop)
+        float entry = (ifvgBullTop + ifvgBullBottom) / 2
+        
+        FVGZone newZone = FVGZone.new()
+        newZone.priceTop := ifvgBullTop
+        newZone.priceBottom := ifvgBullBottom
+        newZone.isBullish := true
+        newZone.barIdx := bar_index
+        newZone.state := 0
+        newZone.quality := 8.0  // IFVG gets high quality
+        newZone.isIFVG := true
+        newZone.alignedWithOB := false
+        
+        box zoneBox = box.new(
+             left=bar_index,
+             top=ifvgBullTop,
+             right=bar_index + EXTEND_BARS,
+             bottom=ifvgBullBottom,
+             border_color=color.new(#9C27B0, 30),
+             bgcolor=ifvgColor,
+             border_width=2,
+             border_style=line.style_dashed)
+        line entryLine = line.new(
+             x1=bar_index,
+             y1=entry,
+             x2=bar_index + EXTEND_BARS,
+             y2=entry,
+             color=color.new(#9C27B0, 40),
+             style=line.style_dotted,
+             width=1)
+        
+        array.push(fvgZones, newZone)
+        array.push(fvgBoxes, zoneBox)
+        array.push(fvgLines, entryLine)
+    
+    if ifvgBear and not na(ifvgBearTop)
+        float entry = (ifvgBearTop + ifvgBearBottom) / 2
+        
+        FVGZone newZone = FVGZone.new()
+        newZone.priceTop := ifvgBearTop
+        newZone.priceBottom := ifvgBearBottom
+        newZone.isBullish := false
+        newZone.barIdx := bar_index
+        newZone.state := 0
+        newZone.quality := 8.0
+        newZone.isIFVG := true
+        newZone.alignedWithOB := false
+        
+        box zoneBox = box.new(
+             left=bar_index,
+             top=ifvgBearTop,
+             right=bar_index + EXTEND_BARS,
+             bottom=ifvgBearBottom,
+             border_color=color.new(#9C27B0, 30),
+             bgcolor=ifvgColor,
+             border_width=2,
+             border_style=line.style_dashed)
+        line entryLine = line.new(
+             x1=bar_index,
+             y1=entry,
+             x2=bar_index + EXTEND_BARS,
+             y2=entry,
+             color=color.new(#9C27B0, 40),
+             style=line.style_dotted,
+             width=1)
+        
+        array.push(fvgZones, newZone)
+        array.push(fvgBoxes, zoneBox)
+        array.push(fvgLines, entryLine)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// █████████████████████  ZONE STATE MANAGEMENT  ████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+var bool atBullZone = false
+var bool atBearZone = false
+var bool atBullOB = false
+var bool atBearOB = false
+var bool atIFVG = false
+var float currentZoneQuality = 0.0
+
+atBullZone := false
+atBearZone := false
+atBullOB := false
+atBearOB := false
+atIFVG := false
+currentZoneQuality := 0.0
+
+// Manage FVG zones
+if array.size(fvgZones) > 0
+    for i = array.size(fvgZones) - 1 to 0
+        if i >= array.size(fvgZones)
+            continue
+            
+        FVGZone zone = array.get(fvgZones, i)
+        int age = bar_index - zone.barIdx
+        
+        // Delete old or broken zones
+        if age > maxZoneAge or zone.state >= 2
+            if i < array.size(fvgBoxes)
+                box.delete(array.get(fvgBoxes, i))
+                array.remove(fvgBoxes, i)
+            if i < array.size(fvgLines)
+                line.delete(array.get(fvgLines, i))
+                array.remove(fvgLines, i)
+            array.remove(fvgZones, i)
+            continue
+        
+        // Check if price is in zone
+        bool inZone = close >= zone.priceBottom and close <= zone.priceTop
+        
+        if zone.state < 2
+            if zone.isBullish
+                if inZone
+                    atBullZone := true
+                    currentZoneQuality := math.max(currentZoneQuality, zone.quality)
+                    if zone.isIFVG
+                        atIFVG := true
+            else
+                if inZone
+                    atBearZone := true
+                    currentZoneQuality := math.max(currentZoneQuality, zone.quality)
+                    if zone.isIFVG
+                        atIFVG := true
+        
+        // Update zone state
+        float midPoint = (zone.priceTop + zone.priceBottom) / 2
+        if zone.isBullish
+            if zone.state == 0 and low <= midPoint
+                zone.state := 1
+                if i < array.size(fvgBoxes)
+                    box.set_bgcolor(array.get(fvgBoxes, i), color.new(#78909C, 85))
+            if zone.state < 2 and close < zone.priceBottom
+                zone.state := 2
+        else
+            if zone.state == 0 and high >= midPoint
+                zone.state := 1
+                if i < array.size(fvgBoxes)
+                    box.set_bgcolor(array.get(fvgBoxes, i), color.new(#78909C, 85))
+            if zone.state < 2 and close > zone.priceTop
+                zone.state := 2
+
+// Manage Order Blocks
+if array.size(orderBlocks) > 0
+    for i = array.size(orderBlocks) - 1 to 0
+        if i >= array.size(orderBlocks)
+            continue
+            
+        OrderBlock ob = array.get(orderBlocks, i)
+        int age = bar_index - ob.barIdx
+        
+        // Delete old or mitigated OBs
+        if age > maxZoneAge or ob.state >= 2
+            if i < array.size(obBoxes)
+                box.delete(array.get(obBoxes, i))
+                array.remove(obBoxes, i)
+            array.remove(orderBlocks, i)
+            continue
+        
+        // Check if price is in OB
+        bool inOB = close >= ob.priceBottom and close <= ob.priceTop
+        
+        if ob.state < 2
+            if ob.isBullish and inOB
+                atBullOB := true
+            else if not ob.isBullish and inOB
+                atBearOB := true
+        
+        // Update OB state
+        float midPoint = (ob.priceTop + ob.priceBottom) / 2
+        if ob.isBullish
+            if ob.state == 0 and low <= midPoint
+                ob.state := 1
+                if i < array.size(obBoxes)
+                    box.set_bgcolor(array.get(obBoxes, i), color.new(#2196F3, 85))
+            if ob.state < 2 and close < ob.priceBottom
+                ob.state := 2
+        else
+            if ob.state == 0 and high >= midPoint
+                ob.state := 1
+                if i < array.size(obBoxes)
+                    box.set_bgcolor(array.get(obBoxes, i), color.new(#E91E63, 85))
+            if ob.state < 2 and close > ob.priceTop
+                ob.state := 2
+
+// Garbage collection for zones
+while array.size(fvgZones) > maxZones
+    if array.size(fvgBoxes) > 0
+        box.delete(array.get(fvgBoxes, 0))
+        array.remove(fvgBoxes, 0)
+    if array.size(fvgLines) > 0
+        line.delete(array.get(fvgLines, 0))
+        array.remove(fvgLines, 0)
+    if array.size(fvgZones) > 0
+        array.remove(fvgZones, 0)
+
+while array.size(orderBlocks) > maxOrderBlocks
+    if array.size(obBoxes) > 0
+        box.delete(array.get(obBoxes, 0))
+        array.remove(obBoxes, 0)
+    if array.size(orderBlocks) > 0
+        array.remove(orderBlocks, 0)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// █████████████████  CONFLUENCE SCORING (ENHANCED)  ████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+bool confirmedLong = isBullish and buyDominant
+bool confirmedShort = isBearish and sellDominant
+
+bool cvdConfirmLong = not requireCVDConfirm or cvdBullish
+bool cvdConfirmShort = not requireCVDConfirm or cvdBearish
+
+// Base signal requirements
+bool baseLong = isTiered and hasVolume and confirmedLong and hasStrongBody and hasSignificantRange and wicksOK and cvdConfirmLong and sessionOK
+bool baseShort = isTiered and hasVolume and confirmedShort and hasStrongBody and hasSignificantRange and wicksOK and cvdConfirmShort and sessionOK
+
+// Enhanced Confluence Scoring (max 12, displayed as /10 normalized)
+float longConfluence = 0.0
+float shortConfluence = 0.0
+
+if baseLong
+    longConfluence := tierScore                              // S=3, A=2, B=1
+    longConfluence += atBullZone ? 1.5 : 0.0                 // In FVG zone
+    longConfluence += atBullOB ? 1.5 : 0.0                   // In Order Block
+    longConfluence += atIFVG ? 1.0 : 0.0                     // In IFVG (bonus)
+    longConfluence += hasStrongVolume ? 1.0 : 0.0            // Strong volume (2x+)
+    longConfluence += hasExtremeVolume ? 0.5 : 0.0           // Extreme volume (2.5x+)
+    longConfluence += strongDelta ? 1.0 : 0.0                // Strong delta (70%+)
+    longConfluence += extremeDelta ? 0.5 : 0.0               // Extreme delta (78%+)
+    longConfluence += cvdStrongBull ? 1.0 : (cvdBullish ? 0.5 : 0.0)  // CVD momentum
+    longConfluence += recentBullSweep ? 1.5 : 0.0            // Liquidity sweep confirmation
+    // Normalize to 10
+    longConfluence := math.min(10.0, longConfluence * 0.85)
+
+if baseShort
+    shortConfluence := tierScore
+    shortConfluence += atBearZone ? 1.5 : 0.0
+    shortConfluence += atBearOB ? 1.5 : 0.0
+    shortConfluence += atIFVG ? 1.0 : 0.0
+    shortConfluence += hasStrongVolume ? 1.0 : 0.0
+    shortConfluence += hasExtremeVolume ? 0.5 : 0.0
+    shortConfluence += strongDelta ? 1.0 : 0.0
+    shortConfluence += extremeDelta ? 0.5 : 0.0
+    shortConfluence += cvdStrongBear ? 1.0 : (cvdBearish ? 0.5 : 0.0)
+    shortConfluence += recentBearSweep ? 1.5 : 0.0
+    shortConfluence := math.min(10.0, shortConfluence * 0.85)
+
+// Score classification
+string longScoreClass = longConfluence >= minScoreExcellent ? "EXCELLENT" : longConfluence >= minScoreWeak ? "MEDIUM" : "WEAK"
+string shortScoreClass = shortConfluence >= minScoreExcellent ? "EXCELLENT" : shortConfluence >= minScoreWeak ? "MEDIUM" : "WEAK"
+
+// Final signals (require at least MEDIUM score)
+bool longSignal = baseLong and longConfluence >= minScoreWeak
+bool shortSignal = baseShort and shortConfluence >= minScoreWeak
+
+bool sLong = longSignal and isTierS
+bool aLong = longSignal and isTierA
+bool bLong = longSignal and isTierB
+
+bool sShort = shortSignal and isTierS
+bool aShort = shortSignal and isTierA
+bool bShort = shortSignal and isTierB
+
+// Zone entry signals (when at quality zone but no tier signal)
+bool dfzBuyEntry = (atBullZone or atBullOB) and buyDominant and hasVolume and sessionOK and not longSignal and currentZoneQuality >= 6.0
+bool dfzSellEntry = (atBearZone or atBearOB) and sellDominant and hasVolume and sessionOK and not shortSignal and currentZoneQuality >= 6.0
+
+// ══════════════════════════════════════════════════════════════════════════════
+// █████████████████████  STOP/TARGET CALCULATION  ██████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+float longStop = na
+float shortStop = na
+float longTarget = na
+float shortTarget = na
+
+if longSignal
+    longStop := low - TICK_VALUE * 2
+    float riskPts = close - longStop
+    float rewardMult = isTierS ? 2.5 : isTierA ? 2.0 : 1.5
+    // Boost reward for excellent setups
+    if longConfluence >= minScoreExcellent
+        rewardMult += 0.5
+    longTarget := close + (riskPts * rewardMult)
+
+if shortSignal
+    shortStop := high + TICK_VALUE * 2
+    float riskPts = shortStop - close
+    float rewardMult = isTierS ? 2.5 : isTierA ? 2.0 : 1.5
+    if shortConfluence >= minScoreExcellent
+        rewardMult += 0.5
+    shortTarget := close - (riskPts * rewardMult)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// █████████████████████████████  VISUALIZATION  ████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Tier Signal Markers
+plotshape(sLong, "S Long", shape.triangleup, location.belowbar, sTierColor, size=size.normal, text="S🎯", textcolor=color.white)
+plotshape(aLong, "A Long", shape.triangleup, location.belowbar, aTierColor, size=size.small, text="A🎯", textcolor=color.white)
+plotshape(bLong, "B Long", shape.triangleup, location.belowbar, bTierColor, size=size.tiny, text="B🎯", textcolor=color.white)
+
+plotshape(sShort, "S Short", shape.triangledown, location.abovebar, sTierColor, size=size.normal, text="S🎯", textcolor=color.white)
+plotshape(aShort, "A Short", shape.triangledown, location.abovebar, aTierColor, size=size.small, text="A🎯", textcolor=color.white)
+plotshape(bShort, "B Short", shape.triangledown, location.abovebar, bTierColor, size=size.tiny, text="B🎯", textcolor=color.white)
+
+// Zone Entry Signals
+plotshape(dfzBuyEntry, "Zone Buy", shape.labelup, location.belowbar, color.new(#00E676, 0), text="Z", textcolor=color.white, size=size.tiny)
+plotshape(dfzSellEntry, "Zone Sell", shape.labeldown, location.abovebar, color.new(#FF5252, 0), text="Z", textcolor=color.white, size=size.tiny)
+
+// Liquidity Sweep Markers
+plotshape(showLiqSweeps and bullishSweep, "Bull Sweep", shape.diamond, location.belowbar, sweepBullColor, size=size.small, text="LS↑", textcolor=color.white)
+plotshape(showLiqSweeps and bearishSweep, "Bear Sweep", shape.diamond, location.abovebar, sweepBearColor, size=size.small, text="LS↓", textcolor=color.white)
+
+// Session Markers
+plotshape(londonStart, "LDN", shape.circle, location.abovebar, color.new(#2196F3, 0), size=size.tiny)
+plotshape(nyStart, "NY", shape.circle, location.abovebar, color.new(#4CAF50, 0), size=size.tiny)
+plotshape(powerHourStart, "PWR", shape.circle, location.abovebar, color.new(#FF9800, 0), size=size.tiny)
+
+// Session backgrounds
+bgcolor(inLondon ? color.new(#2196F3, 95) : na, title="London BG")
+bgcolor(inNY ? color.new(#4CAF50, 95) : na, title="NY BG")
+bgcolor(inPowerHour ? color.new(#FF9800, 95) : na, title="Power Hour BG")
+
+// Stop/Target lines
+plot(longSignal ? longStop : na, "Long Stop", color.new(#FF5252, 0), 2, plot.style_linebr)
+plot(longSignal ? longTarget : na, "Long Target", color.new(#00E676, 0), 2, plot.style_linebr)
+plot(shortSignal ? shortStop : na, "Short Stop", color.new(#FF5252, 0), 2, plot.style_linebr)
+plot(shortSignal ? shortTarget : na, "Short Target", color.new(#00E676, 0), 2, plot.style_linebr)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████████  ENHANCED INFO TABLE  ███████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Table position mapping
+tablePosition = switch tablePos
+    "Top Right" => position.top_right
+    "Top Left" => position.top_left
+    "Bottom Right" => position.bottom_right
+    "Bottom Left" => position.bottom_left
+    "Top Center" => position.top_center
+    "Bottom Center" => position.bottom_center
+    => position.top_right
+
+// Table size mapping
+tSize = switch tableSize
+    "tiny" => size.tiny
+    "small" => size.small
+    "normal" => size.normal
+    "large" => size.large
+    => size.normal
+
+tSizeSmall = switch tableSize
+    "tiny" => size.tiny
+    "small" => size.tiny
+    "normal" => size.small
+    "large" => size.normal
+    => size.small
+
+// Create enhanced table (3 columns, 14 rows)
+var table panel = table.new(tablePosition, 3, 14, 
+     bgcolor=color.new(#0d1117, tableTransparency), 
+     border_width=2, 
+     border_color=color.new(#30363d, 0),
+     frame_width=2,
+     frame_color=color.new(#58a6ff, 30))
+
+if barstate.islast
+    color tierCol = isTierS ? sTierColor : isTierA ? aTierColor : isTierB ? bTierColor : color.gray
+    float activeScore = longSignal ? longConfluence : shortSignal ? shortConfluence : math.max(baseLong ? longConfluence : 0, baseShort ? shortConfluence : 0)
+    string activeScoreClass = activeScore >= minScoreExcellent ? "EXCELLENT" : activeScore >= minScoreWeak ? "MEDIUM" : "WEAK"
+    
+    // Header
+    table.cell(panel, 0, 0, "YM SNIPER", text_color=color.white, text_size=tSize, bgcolor=color.new(#58a6ff, 20))
+    table.cell(panel, 1, 0, "v6", text_color=#58a6ff, text_size=tSize, bgcolor=color.new(#58a6ff, 20))
+    table.cell(panel, 2, 0, "🎯", text_color=color.white, text_size=tSize, bgcolor=color.new(#58a6ff, 20))
+    
+    // ═══ CANDLE SECTION ═══
+    table.cell(panel, 0, 1, "══ CANDLE ══", text_color=color.new(#8b949e, 0), text_size=tSizeSmall, bgcolor=color.new(#21262d, 0))
+    table.merge_cells(panel, 0, 1, 2, 1)
+    
+    table.cell(panel, 0, 2, "Points", text_color=#8b949e, text_size=tSizeSmall, bgcolor=color.new(#161b22, 0))
+    table.cell(panel, 1, 2, str.tostring(candlePoints, "#.#"), text_color=tierCol, text_size=tSize, bgcolor=color.new(#161b22, 0))
+    table.cell(panel, 2, 2, tier, text_color=tierCol, text_size=tSize, bgcolor=color.new(#161b22, 0))
+    
+    color vCol = hasExtremeVolume ? #00ff00 : hasStrongVolume ? #00E676 : hasVolume ? #4CAF50 : #f85149
+    table.cell(panel, 0, 3, "Volume", text_color=#8b949e, text_size=tSizeSmall, bgcolor=color.new(#161b22, 0))
+    table.cell(panel, 1, 3, str.tostring(volRatio, "#.##") + "x", text_color=vCol, text_size=tSize, bgcolor=color.new(#161b22, 0))
+    string volGrade = hasExtremeVolume ? "🔥" : hasStrongVolume ? "✓✓" : hasVolume ? "✓" : "✗"
+    table.cell(panel, 2, 3, volGrade, text_color=vCol, text_size=tSize, bgcolor=color.new(#161b22, 0))
+    
+    // ═══ ORDERFLOW SECTION ═══
+    table.cell(panel, 0, 4, "══ ORDERFLOW ══", text_color=color.new(#8b949e, 0), text_size=tSizeSmall, bgcolor=color.new(#21262d, 0))
+    table.merge_cells(panel, 0, 4, 2, 4)
+    
+    string dStr = buyPct > sellPct ? str.tostring(buyPct * 100, "#") + "% BUY" : str.tostring(sellPct * 100, "#") + "% SELL"
+    color dCol = extremeDelta ? (buyPct > sellPct ? #00ff00 : #ff0000) : strongDelta ? (buyPct > sellPct ? #00E676 : #f85149) : buyDominant ? #4CAF50 : sellDominant ? #da3633 : #8b949e
+    table.cell(panel, 0, 5, "Delta", text_color=#8b949e, text_size=tSizeSmall, bgcolor=color.new(#161b22, 0))
+    table.cell(panel, 1, 5, dStr, text_color=dCol, text_size=tSize, bgcolor=color.new(#161b22, 0))
+    string deltaGrade = extremeDelta ? "🔥" : strongDelta ? "✓✓" : (buyDominant or sellDominant) ? "✓" : "—"
+    table.cell(panel, 2, 5, deltaGrade, text_color=dCol, text_size=tSize, bgcolor=color.new(#161b22, 0))
+    
+    color cvdCol = cvdStrongBull ? #00ff00 : cvdStrongBear ? #ff0000 : cvdBullish ? #00E676 : cvdBearish ? #f85149 : #8b949e
+    string cvdDir = cvdStrongBull ? "▲▲ STRONG" : cvdStrongBear ? "▼▼ STRONG" : cvdBullish ? "▲ UP" : cvdBearish ? "▼ DOWN" : "— FLAT"
+    table.cell(panel, 0, 6, "CVD", text_color=#8b949e, text_size=tSizeSmall, bgcolor=color.new(#161b22, 0))
+    table.cell(panel, 1, 6, cvdDir, text_color=cvdCol, text_size=tSize, bgcolor=color.new(#161b22, 0))
+    table.cell(panel, 2, 6, "", text_color=cvdCol, text_size=tSize, bgcolor=color.new(#161b22, 0))
+    
+    // ═══ STRUCTURE SECTION ═══
+    table.cell(panel, 0, 7, "══ STRUCTURE ══", text_color=color.new(#8b949e, 0), text_size=tSizeSmall, bgcolor=color.new(#21262d, 0))
+    table.merge_cells(panel, 0, 7, 2, 7)
+    
+    string zoneStatus = atIFVG ? "IFVG" : atBullZone ? "BULL FVG" : atBearZone ? "BEAR FVG" : "—"
+    color zoneCol = atIFVG ? #9C27B0 : atBullZone ? #00E676 : atBearZone ? #f85149 : #8b949e
+    table.cell(panel, 0, 8, "FVG Zone", text_color=#8b949e, text_size=tSizeSmall, bgcolor=color.new(#161b22, 0))
+    table.cell(panel, 1, 8, zoneStatus, text_color=zoneCol, text_size=tSize, bgcolor=color.new(#161b22, 0))
+    table.cell(panel, 2, 8, currentZoneQuality > 0 ? str.tostring(currentZoneQuality, "#.#") : "", text_color=zoneCol, text_size=tSizeSmall, bgcolor=color.new(#161b22, 0))
+    
+    string obStatus = atBullOB ? "BULL OB" : atBearOB ? "BEAR OB" : "—"
+    color obCol = atBullOB ? #2196F3 : atBearOB ? #E91E63 : #8b949e
+    table.cell(panel, 0, 9, "Order Block", text_color=#8b949e, text_size=tSizeSmall, bgcolor=color.new(#161b22, 0))
+    table.cell(panel, 1, 9, obStatus, text_color=obCol, text_size=tSize, bgcolor=color.new(#161b22, 0))
+    table.cell(panel, 2, 9, atBullOB or atBearOB ? "✓" : "", text_color=obCol, text_size=tSize, bgcolor=color.new(#161b22, 0))
+    
+    string sweepStatus = recentBullSweep ? "BULL LS↑" : recentBearSweep ? "BEAR LS↓" : "—"
+    color sweepCol = recentBullSweep ? sweepBullColor : recentBearSweep ? sweepBearColor : #8b949e
+    table.cell(panel, 0, 10, "Liq Sweep", text_color=#8b949e, text_size=tSizeSmall, bgcolor=color.new(#161b22, 0))
+    table.cell(panel, 1, 10, sweepStatus, text_color=sweepCol, text_size=tSize, bgcolor=color.new(#161b22, 0))
+    table.cell(panel, 2, 10, recentBullSweep or recentBearSweep ? "🎯" : "", text_color=sweepCol, text_size=tSize, bgcolor=color.new(#161b22, 0))
+    
+    // ═══ SIGNAL SECTION ═══
+    table.cell(panel, 0, 11, "══ SIGNAL ══", text_color=color.new(#8b949e, 0), text_size=tSizeSmall, bgcolor=color.new(#21262d, 0))
+    table.merge_cells(panel, 0, 11, 2, 11)
+    
+    color sCol = inSession ? #ffa657 : #8b949e
+    table.cell(panel, 0, 12, "Session", text_color=#8b949e, text_size=tSizeSmall, bgcolor=color.new(#161b22, 0))
+    table.cell(panel, 1, 12, currentSession, text_color=sCol, text_size=tSize, bgcolor=color.new(#161b22, 0))
+    table.cell(panel, 2, 12, inSession ? "🟢" : "🔴", text_color=sCol, text_size=tSize, bgcolor=color.new(#161b22, 0))
+    
+    color scoreCol = activeScore >= minScoreExcellent ? #00ff00 : activeScore >= minScoreWeak ? #ffa657 : #f85149
+    color scoreBg = activeScore >= minScoreExcellent ? color.new(#238636, 30) : activeScore >= minScoreWeak ? color.new(#9e6a03, 30) : color.new(#161b22, 0)
+    table.cell(panel, 0, 13, "SCORE", text_color=#8b949e, text_size=tSizeSmall, bgcolor=scoreBg)
+    table.cell(panel, 1, 13, str.tostring(activeScore, "#.#") + "/10", text_color=scoreCol, text_size=tSize, bgcolor=scoreBg)
+    table.cell(panel, 2, 13, activeScoreClass, text_color=scoreCol, text_size=tSizeSmall, bgcolor=scoreBg)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ██████████████████████████████  ALERTS  ══════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+
+alertcondition(sLong, title="🎯 S-TIER LONG", message="🎯🥇 S-TIER LONG {{ticker}} @ {{close}} | HOLD | Score: HIGH")
+alertcondition(aLong, title="🎯 A-TIER LONG", message="🎯🥈 A-TIER LONG {{ticker}} @ {{close}} | SWING")
+alertcondition(bLong, title="🎯 B-TIER LONG", message="🎯🥉 B-TIER LONG {{ticker}} @ {{close}} | SCALP")
+
+alertcondition(sShort, title="🎯 S-TIER SHORT", message="🎯🥇 S-TIER SHORT {{ticker}} @ {{close}} | HOLD | Score: HIGH")
+alertcondition(aShort, title="🎯 A-TIER SHORT", message="🎯🥈 A-TIER SHORT {{ticker}} @ {{close}} | SWING")
+alertcondition(bShort, title="🎯 B-TIER SHORT", message="🎯🥉 B-TIER SHORT {{ticker}} @ {{close}} | SCALP")
+
+alertcondition(dfzBuyEntry, title="🎯 ZONE BUY", message="🟢 ZONE BUY {{ticker}} @ {{close}} | Quality Zone Entry")
+alertcondition(dfzSellEntry, title="🎯 ZONE SELL", message="🔴 ZONE SELL {{ticker}} @ {{close}} | Quality Zone Entry")
+
+alertcondition(bullishSweep, title="💎 BULL LIQUIDITY SWEEP", message="💎 BULLISH SWEEP {{ticker}} @ {{close}} | Lows swept + rejection")
+alertcondition(bearishSweep, title="💎 BEAR LIQUIDITY SWEEP", message="💎 BEARISH SWEEP {{ticker}} @ {{close}} | Highs swept + rejection")
+
+alertcondition(bullOBCondition and bullOBStrength >= 4, title="📦 NEW BULL OB", message="📦 NEW BULLISH ORDER BLOCK {{ticker}}")
+alertcondition(bearOBCondition and bearOBStrength >= 4, title="📦 NEW BEAR OB", message="📦 NEW BEARISH ORDER BLOCK {{ticker}}")
+
+alertcondition(validBullFVG, title="📦 NEW BULL FVG", message="🟩 NEW BULLISH FVG {{ticker}}")
+alertcondition(validBearFVG, title="📦 NEW BEAR FVG", message="🟥 NEW BEARISH FVG {{ticker}}")
+
+alertcondition(ifvgBull, title="🔄 BULL IFVG", message="🔄 BULLISH IFVG {{ticker}} | Bearish FVG reclaimed")
+alertcondition(ifvgBear, title="🔄 BEAR IFVG", message="🔄 BEARISH IFVG {{ticker}} | Bullish FVG reclaimed")
+
+alertcondition(londonStart, title="LONDON OPEN", message="London Session Open")
+alertcondition(nyStart, title="NY OPEN", message="NY Session Open")
+alertcondition(powerHourStart, title="POWER HOUR", message="Power Hour Open")
+
+alertcondition(longSignal or shortSignal, title="🎯 ANY SNIPER SIGNAL", message="🎯 SNIPER SIGNAL {{ticker}} @ {{close}}")
+
+alertcondition(longSignal and longConfluence >= minScoreExcellent, title="⭐ EXCELLENT LONG", message="⭐ EXCELLENT LONG {{ticker}} @ {{close}} | Top-tier setup!")
+alertcondition(shortSignal and shortConfluence >= minScoreExcellent, title="⭐ EXCELLENT SHORT", message="⭐ EXCELLENT SHORT {{ticker}} @ {{close}} | Top-tier setup!")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// █████████████████████████  END OF INDICATOR  █████████████████████████════════
+// ══════════════════════════════════════════════════════════════════════════════
