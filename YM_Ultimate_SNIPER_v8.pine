@@ -1,0 +1,1533 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0
+// © Alexandro Disla - YM Ultimate SNIPER v8
+// FIXED: Scoring System + Solid Table + All Timeframes + Filtered Visuals
+// TARGET: 3-7 High-Confluence Trades per Day | WIN AT ALL COST
+// "Zones That Matter" + "See Inside The Candle" Philosophy
+
+//@version=6
+indicator("YM Ultimate SNIPER v8", shorttitle="YM🎯v8", overlay=true, 
+     max_labels_count=500, max_boxes_count=500, max_lines_count=500)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████████  CONSTANTS & INSTRUMENT  ███████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+var float TICK_VALUE = syminfo.mintick
+var int EXTEND_BARS = 500
+
+// Auto-detect instrument for proper tier thresholds
+var string INSTRUMENT = syminfo.ticker
+var bool IS_YM = str.contains(INSTRUMENT, "YM") or str.contains(INSTRUMENT, "MYM")
+var bool IS_NQ = str.contains(INSTRUMENT, "NQ") or str.contains(INSTRUMENT, "MNQ")
+var bool IS_ES = str.contains(INSTRUMENT, "ES") or str.contains(INSTRUMENT, "MES")
+var bool IS_GC = str.contains(INSTRUMENT, "GC") or str.contains(INSTRUMENT, "MGC")
+var bool IS_BTC = str.contains(INSTRUMENT, "BTC")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████████████  CONFIGURATION  █████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+string GRP_TIER = "═══════════ TIER THRESHOLDS ═══════════"
+float sTierPoints = input.float(50.0, "S-Tier (Points)", minval=20, maxval=200, step=5, group=GRP_TIER,
+     tooltip="S-Tier: HOLD position (institutional sweep)\nYM=50, NQ=100, GC=20, BTC=500")
+float aTierPoints = input.float(25.0, "A-Tier (Points)", minval=10, maxval=100, step=5, group=GRP_TIER,
+     tooltip="A-Tier: SWING trade (strong momentum)\nYM=25, NQ=50, GC=10, BTC=250")
+float bTierPoints = input.float(12.0, "B-Tier (Points)", minval=5, maxval=50, step=1, group=GRP_TIER,
+     tooltip="B-Tier: SCALP quick (quick grab)\nYM=12, NQ=25, GC=5, BTC=100")
+
+string GRP_SNIPER = "═══════════ SNIPER FILTERS ═══════════"
+float minVolRatio = input.float(1.5, "Min Volume Ratio", minval=1.0, maxval=3.0, step=0.1, group=GRP_SNIPER,
+     tooltip="Volume must be this multiple of 20-bar average")
+float deltaThreshold = input.float(0.60, "Delta Dominance %", minval=0.55, maxval=0.80, step=0.01, group=GRP_SNIPER,
+     tooltip="Minimum buy/sell dominance (0.60 = 60%)")
+float bodyRatio = input.float(0.60, "Min Body Ratio", minval=0.4, maxval=0.9, step=0.02, group=GRP_SNIPER,
+     tooltip="Body size as % of total candle range")
+float rangeMultiplier = input.float(1.2, "Min Range vs Avg", minval=1.0, maxval=2.5, step=0.1, group=GRP_SNIPER,
+     tooltip="Candle range must be this multiple of average")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ████████████████████████  INTRABAR ANALYSIS  █████████████████████████████████
+// ═══════════════════════════════════════════════════════════════════════════════
+
+string GRP_INTRABAR = "═══════════ INTRABAR ANALYSIS ═══════════"
+bool enableIntrabar = input.bool(true, "Enable Intrabar Analysis", group=GRP_INTRABAR,
+     tooltip="Analyze lower timeframe data within each bar for superior delta and momentum detection")
+string intrabarTF = input.string("1", "Intrabar Timeframe", 
+     options=["1T", "5T", "10T", "25T", "50T", "100T", "250T", "500T", "1000T", "1S", "5S", "10S", "15S", "30S", "1", "2", "3", "5", "10", "15", "30", "45", "60", "120", "180", "240", "D", "W", "M"], 
+     group=GRP_INTRABAR,
+     tooltip="Lower timeframe to analyze. MUST be lower than chart TF!\n1T-1000T = Ticks (Premium+ required)\n1S-30S = Seconds\n1-240 = Minutes\nD/W/M = Daily/Weekly/Monthly")
+float absorptionThreshold = input.float(0.65, "Absorption Detection %", minval=0.50, maxval=0.85, step=0.05, group=GRP_INTRABAR,
+     tooltip="Volume clustering threshold for absorption detection")
+float intrabarMomentumMin = input.float(0.60, "Min Intrabar Momentum", minval=0.50, maxval=0.80, step=0.05, group=GRP_INTRABAR,
+     tooltip="Minimum percentage of intrabar candles in same direction")
+bool showIntrabarMetrics = input.bool(true, "Show Intrabar Metrics in Table", group=GRP_INTRABAR)
+float intrabarDeltaWeight = input.float(1.5, "Intrabar Delta Confluence Weight", minval=0.5, maxval=3.0, step=0.25, group=GRP_INTRABAR,
+     tooltip="How much intrabar delta adds to confluence score")
+float absorptionWeight = input.float(1.0, "Absorption Confluence Weight", minval=0.5, maxval=2.0, step=0.25, group=GRP_INTRABAR,
+     tooltip="How much absorption detection adds to confluence score")
+
+string GRP_VISUALS = "═══════════ VISUAL FILTERS ═══════════"
+bool onlyQualitySweeps = input.bool(true, "Only Show Quality Sweeps", group=GRP_VISUALS,
+     tooltip="Only show sweeps that are in a zone or have high confluence")
+bool onlyQualityAbsorption = input.bool(true, "Only Show Quality Absorption", group=GRP_VISUALS,
+     tooltip="Only show absorption when in a zone or with tier signal")
+float minSweepScore = input.float(2.0, "Min Sweep Quality Score", minval=0.0, maxval=5.0, step=0.5, group=GRP_VISUALS,
+     tooltip="Minimum confluence score to show sweep marker")
+float minAbsorptionScore = input.float(2.0, "Min Absorption Quality Score", minval=0.0, maxval=5.0, step=0.5, group=GRP_VISUALS,
+     tooltip="Minimum confluence score to show absorption marker")
+
+string GRP_SESSION = "═══════════ SESSION WINDOWS ═══════════"
+bool onlyKeySession = input.bool(true, "Only Signal in Key Sessions", group=GRP_SESSION)
+string sessionTimezone = input.string("America/New_York", "Timezone", 
+     options=["America/New_York", "America/Chicago", "Europe/London", "UTC"], group=GRP_SESSION)
+string londonWindow = input.string("0300-0500", "London Window", group=GRP_SESSION)
+string nyWindow = input.string("0930-1130", "NY Open Window", group=GRP_SESSION)
+string nyPowerHour = input.string("1500-1600", "NY Power Hour", group=GRP_SESSION)
+bool includePowerHour = input.bool(true, "Include Power Hour", group=GRP_SESSION)
+
+string GRP_OB = "═══════════ ORDER BLOCKS ═══════════"
+bool showOrderBlocks = input.bool(true, "Show Order Blocks", group=GRP_OB)
+int obLookback = input.int(20, "OB Lookback Bars", minval=10, maxval=50, group=GRP_OB)
+float obMinStrength = input.float(1.5, "OB Min Move Strength (ATR)", minval=1.0, maxval=3.0, step=0.1, group=GRP_OB,
+     tooltip="Minimum move after OB candle in ATR multiples")
+int maxOrderBlocks = input.int(8, "Max Active Order Blocks", minval=3, maxval=15, group=GRP_OB)
+
+string GRP_LIQ = "═══════════ LIQUIDITY SWEEPS ═══════════"
+bool showLiqSweeps = input.bool(true, "Show Liquidity Sweeps", group=GRP_LIQ)
+int swingLookback = input.int(15, "Swing Lookback", minval=5, maxval=50, group=GRP_LIQ)
+float sweepMinWick = input.float(0.3, "Min Sweep Wick Ratio", minval=0.15, maxval=0.6, step=0.05, group=GRP_LIQ,
+     tooltip="Minimum wick size showing rejection")
+int maxSweepAge = input.int(3, "Max Sweep Signal Age (bars)", minval=1, maxval=10, group=GRP_LIQ)
+
+string GRP_ZONES = "═══════════ FVG & IFVG ZONES ═══════════"
+bool showFVG = input.bool(true, "Show FVG Zones", group=GRP_ZONES)
+bool showIFVG = input.bool(true, "Show IFVG (Inverse FVG)", group=GRP_ZONES)
+float minGapATR = input.float(0.25, "Min Gap Size (ATR%)", minval=0.1, maxval=0.8, step=0.05, group=GRP_ZONES)
+int maxZoneAge = input.int(75, "Max Zone Age (bars)", minval=30, maxval=200, group=GRP_ZONES)
+int maxZones = input.int(10, "Max Active Zones", minval=5, maxval=20, group=GRP_ZONES)
+float zoneQualityMin = input.float(5.0, "Min Zone Quality Score", minval=3.0, maxval=9.0, step=0.5, group=GRP_ZONES,
+     tooltip="Only show zones that score above this threshold (max 10)")
+
+string GRP_CONFLUENCE = "═══════════ CONFLUENCE SCORING ═══════════"
+float minScoreSignal = input.float(5.0, "Min Score: Show Signal", minval=2.0, maxval=6.0, step=0.5, group=GRP_CONFLUENCE,
+     tooltip="Score below this = no signal shown (>4.9)")
+float minScoreMedium = input.float(5.0, "Min Score: MEDIUM", minval=3.0, maxval=7.0, step=0.5, group=GRP_CONFLUENCE,
+     tooltip="Score at or above this = MEDIUM quality")
+float minScoreExcellent = input.float(8.0, "Min Score: EXCELLENT", minval=6.0, maxval=9.0, step=0.5, group=GRP_CONFLUENCE,
+     tooltip="Score at or above this = EXCELLENT (top tier)")
+float minScoreGodMode = input.float(9.0, "Min Score: GOD MODE", minval=8.0, maxval=10.0, step=0.5, group=GRP_CONFLUENCE,
+     tooltip="Score at or above this = GOD MODE (max confluence)")
+
+string GRP_COLORS = "═══════════ COLORS ═══════════"
+// DISTINCT SIGNAL COLORS for black background
+color godModeColor = input.color(color.new(#00FFFF, 0), "God Mode (Cyan)", group=GRP_COLORS)      // Bright cyan - unmissable
+color sTierColor = input.color(color.new(#FFD700, 0), "S-Tier (Gold)", group=GRP_COLORS)          // Gold
+color aTierColor = input.color(color.new(#00FF00, 0), "A-Tier (Lime)", group=GRP_COLORS)          // Bright lime
+color bTierColor = input.color(color.new(#FF8C00, 0), "B-Tier (Orange)", group=GRP_COLORS)        // Dark orange
+// ZONE COLORS
+color bullFVGColor = input.color(color.new(#32CD32, 80), "Bullish FVG", group=GRP_COLORS)         // Lime green
+color bearFVGColor = input.color(color.new(#DC143C, 80), "Bearish FVG", group=GRP_COLORS)         // Crimson
+color bullOBColor = input.color(color.new(#1E90FF, 75), "Bullish OB", group=GRP_COLORS)           // Dodger blue
+color bearOBColor = input.color(color.new(#FF1493, 75), "Bearish OB", group=GRP_COLORS)           // Deep pink
+color ifvgColor = input.color(color.new(#9400D3, 70), "IFVG", group=GRP_COLORS)                   // Dark violet
+color sweepBullColor = input.color(color.new(#00CED1, 0), "Bullish Sweep", group=GRP_COLORS)      // Dark turquoise
+color sweepBearColor = input.color(color.new(#FF4500, 0), "Bearish Sweep", group=GRP_COLORS)      // Orange red
+color intrabarBullColor = input.color(color.new(#7FFF00, 0), "Intrabar Bull", group=GRP_COLORS)   // Chartreuse
+color intrabarBearColor = input.color(color.new(#FF6347, 0), "Intrabar Bear", group=GRP_COLORS)   // Tomato
+
+string GRP_TABLE = "═══════════ TABLE DISPLAY ═══════════"
+string tableSize = input.string("normal", "Table Size", options=["tiny", "small", "normal", "large"], group=GRP_TABLE)
+string tablePos = input.string("Top Right", "Table Position", 
+     options=["Top Right", "Top Left", "Bottom Right", "Bottom Left", "Top Center", "Bottom Center"], group=GRP_TABLE)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ██████████████████████████  CANDLE STRUCTURE  ████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+float bodyHigh = math.max(open, close)
+float bodyLow = math.min(open, close)
+float bodySize = bodyHigh - bodyLow
+float candleRange = high - low
+float upperWick = high - bodyHigh
+float lowerWick = bodyLow - low
+
+// Points calculation - Instrument specific
+float candlePoints = candleRange / syminfo.mintick
+if IS_NQ
+    candlePoints := candleRange / 0.25  // NQ: 4 ticks per point
+else if IS_YM
+    candlePoints := candleRange / 1.0   // YM: 1 tick per point
+else if IS_ES
+    candlePoints := candleRange / 0.25  // ES: 4 ticks per point
+else if IS_GC
+    candlePoints := candleRange / 0.10  // GC: 10 ticks per point
+else if IS_BTC
+    candlePoints := candleRange / 5.0   // BTC: 5 ticks per point
+
+bool isBullish = close > open
+bool isBearish = close < open
+
+float avgRange = ta.sma(candleRange, 20)
+float avgVol = ta.sma(volume, 20)
+float volRatio = avgVol > 0 ? volume / avgVol : 1.0
+float atr = ta.atr(14)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// █████████████████████  QUALITY METRICS  █████████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+float currentBodyRatio = candleRange > 0 ? bodySize / candleRange : 0
+bool hasStrongBody = currentBodyRatio >= bodyRatio
+bool hasSignificantRange = candleRange >= avgRange * rangeMultiplier
+bool hasVolume = volRatio >= minVolRatio
+bool hasStrongVolume = volRatio >= 2.0
+bool hasExtremeVolume = volRatio >= 2.5
+
+// Wick analysis for rejection detection
+float upperWickRatio = candleRange > 0 ? upperWick / candleRange : 0
+float lowerWickRatio = candleRange > 0 ? lowerWick / candleRange : 0
+bool hasUpperRejection = upperWickRatio >= sweepMinWick
+bool hasLowerRejection = lowerWickRatio >= sweepMinWick
+
+bool bullWickOK = isBullish ? (upperWick < bodySize * 0.5) : true
+bool bearWickOK = isBearish ? (lowerWick < bodySize * 0.5) : true
+bool wicksOK = bullWickOK and bearWickOK
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████████  TIER CLASSIFICATION  ███████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+string tier = candlePoints >= sTierPoints ? "S" : candlePoints >= aTierPoints ? "A" : candlePoints >= bTierPoints ? "B" : "X"
+bool isTiered = tier != "X"
+bool isTierS = tier == "S"
+bool isTierA = tier == "A"
+bool isTierB = tier == "B"
+
+// Tier score contribution (base for confluence)
+float tierScore = isTierS ? 3.0 : isTierA ? 2.0 : isTierB ? 1.0 : 0.0
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████████  SESSION DETECTION  █████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+bool inLondon = not na(time(timeframe.period, londonWindow, sessionTimezone))
+bool inNY = not na(time(timeframe.period, nyWindow, sessionTimezone))
+bool inPowerHour = includePowerHour ? not na(time(timeframe.period, nyPowerHour, sessionTimezone)) : false
+bool inSession = inLondon or inNY or inPowerHour
+bool sessionOK = onlyKeySession ? inSession : true
+
+bool londonStart = na(time(timeframe.period, londonWindow, sessionTimezone)[1]) and inLondon and timeframe.isintraday
+bool nyStart = na(time(timeframe.period, nyWindow, sessionTimezone)[1]) and inNY and timeframe.isintraday
+bool powerHourStart = includePowerHour and na(time(timeframe.period, nyPowerHour, sessionTimezone)[1]) and inPowerHour and timeframe.isintraday
+
+string currentSession = inNY ? "NY" : inLondon ? "LDN" : inPowerHour ? "PWR" : "OFF"
+
+// ══════════════════════════════════════════════════════════════════════════════
+// █████████████████████  INTRABAR ANALYSIS ENGINE  █████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Get lower TF OHLCV data - using dynamic timeframe input
+[ibOpen, ibHigh, ibLow, ibClose, ibVol] = request.security_lower_tf(syminfo.tickerid, intrabarTF, 
+     [open, high, low, close, volume])
+
+// ═══ INTRABAR VALIDATION ═══
+// Check if intrabar TF is valid (lower than chart TF)
+// request.security_lower_tf() returns empty array if TF is not lower
+
+int ibArraySize = array.size(ibClose)
+bool intrabarDataAvailable = ibArraySize > 0
+bool intrabarConfigError = enableIntrabar and not intrabarDataAvailable and barstate.isconfirmed
+
+// ═══ INTRABAR METRICS ═══
+var float intrabarBuyVol = 0.0
+var float intrabarSellVol = 0.0
+var float intrabarDelta = 0.0
+var float intrabarDeltaPct = 0.5
+var bool intrabarBullDominant = false
+var bool intrabarBearDominant = false
+var bool intrabarStrongDelta = false
+var bool intrabarExtremeDelta = false
+
+var int intrabarBullCount = 0
+var int intrabarBearCount = 0
+var int intrabarTotalBars = 0
+var float intrabarMomentum = 0.0
+var bool intrabarMomentumBull = false
+var bool intrabarMomentumBear = false
+var bool intrabarMomentumStrong = false
+
+var bool intrabarAbsorption = false
+var float intrabarAbsorptionScore = 0.0
+var bool intrabarBullAbsorption = false
+var bool intrabarBearAbsorption = false
+
+var bool intrabarInternalSweep = false
+var bool intrabarBullInternalSweep = false
+var bool intrabarBearInternalSweep = false
+
+var float intrabarVolTop = 0.0
+var float intrabarVolMid = 0.0
+var float intrabarVolBottom = 0.0
+var string intrabarVolCluster = "—"
+
+// Process intrabar data
+if enableIntrabar and barstate.isconfirmed
+    intrabarBuyVol := 0.0
+    intrabarSellVol := 0.0
+    intrabarBullCount := 0
+    intrabarBearCount := 0
+    intrabarVolTop := 0.0
+    intrabarVolMid := 0.0
+    intrabarVolBottom := 0.0
+    intrabarBullAbsorption := false
+    intrabarBearAbsorption := false
+    intrabarBullInternalSweep := false
+    intrabarBearInternalSweep := false
+    
+    float barRangeThird = candleRange / 3
+    float topZone = high - barRangeThird
+    float bottomZone = low + barRangeThird
+    
+    bool sweptInternalHigh = false
+    bool sweptInternalLow = false
+    
+    int arrSize = array.size(ibClose)
+    intrabarTotalBars := arrSize
+    
+    if arrSize > 0
+        float earlyHigh = na
+        float earlyLow = na
+        int halfPoint = math.floor(arrSize / 2)
+        
+        for i = 0 to arrSize - 1
+            float ibO = array.get(ibOpen, i)
+            float ibH = array.get(ibHigh, i)
+            float ibL = array.get(ibLow, i)
+            float ibC = array.get(ibClose, i)
+            float ibV = array.get(ibVol, i)
+            
+            // ═══ INTRABAR DELTA ═══
+            bool ibBullish = ibC > ibO
+            bool ibBearish = ibC < ibO
+            
+            float ibRange = ibH - ibL
+            float ibClosePos = ibRange > 0 ? (ibC - ibL) / ibRange : 0.5
+            
+            float ibBuyV = ibV * ibClosePos
+            float ibSellV = ibV * (1 - ibClosePos)
+            
+            if ibBullish
+                ibBuyV := ibBuyV * 1.2
+                ibSellV := ibSellV * 0.8
+            else if ibBearish
+                ibSellV := ibSellV * 1.2
+                ibBuyV := ibBuyV * 0.8
+            
+            intrabarBuyVol := intrabarBuyVol + ibBuyV
+            intrabarSellVol := intrabarSellVol + ibSellV
+            
+            // ═══ INTRABAR MOMENTUM ═══
+            if ibBullish
+                intrabarBullCount := intrabarBullCount + 1
+            else if ibBearish
+                intrabarBearCount := intrabarBearCount + 1
+            
+            // ═══ VOLUME DISTRIBUTION ═══
+            float ibMidpoint = (ibH + ibL) / 2
+            if ibMidpoint >= topZone
+                intrabarVolTop := intrabarVolTop + ibV
+            else if ibMidpoint <= bottomZone
+                intrabarVolBottom := intrabarVolBottom + ibV
+            else
+                intrabarVolMid := intrabarVolMid + ibV
+            
+            // ═══ INTERNAL SWEEP TRACKING ═══
+            if i <= halfPoint
+                earlyHigh := na(earlyHigh) ? ibH : math.max(earlyHigh, ibH)
+                earlyLow := na(earlyLow) ? ibL : math.min(earlyLow, ibL)
+            else
+                if ibH > nz(earlyHigh, high) and ibC < nz(earlyHigh, high)
+                    sweptInternalHigh := true
+                if ibL < nz(earlyLow, low) and ibC > nz(earlyLow, low)
+                    sweptInternalLow := true
+        
+        // ═══ FINAL INTRABAR METRICS ═══
+        float totalIBVol = intrabarBuyVol + intrabarSellVol
+        intrabarDelta := intrabarBuyVol - intrabarSellVol
+        intrabarDeltaPct := totalIBVol > 0 ? math.max(intrabarBuyVol, intrabarSellVol) / totalIBVol : 0.5
+        
+        intrabarBullDominant := intrabarBuyVol > intrabarSellVol and intrabarDeltaPct >= deltaThreshold
+        intrabarBearDominant := intrabarSellVol > intrabarBuyVol and intrabarDeltaPct >= deltaThreshold
+        intrabarStrongDelta := intrabarDeltaPct >= 0.70
+        intrabarExtremeDelta := intrabarDeltaPct >= 0.78
+        
+        int maxCount = math.max(intrabarBullCount, intrabarBearCount)
+        intrabarMomentum := intrabarTotalBars > 0 ? maxCount / intrabarTotalBars : 0
+        intrabarMomentumBull := intrabarBullCount > intrabarBearCount and intrabarMomentum >= intrabarMomentumMin
+        intrabarMomentumBear := intrabarBearCount > intrabarBullCount and intrabarMomentum >= intrabarMomentumMin
+        intrabarMomentumStrong := intrabarMomentum >= 0.75
+        
+        // Absorption detection
+        float volPerPoint = candlePoints > 0 ? volume / candlePoints : 0
+        float avgVolPerPoint = ta.sma(volume / math.max(candlePoints, 1), 20)
+        bool highVolLowMove = nz(avgVolPerPoint) > 0 and volPerPoint > avgVolPerPoint * 1.5 and candleRange < avgRange * 0.6
+        
+        float maxVolZone = math.max(intrabarVolTop, math.max(intrabarVolMid, intrabarVolBottom))
+        float volClusterPct = totalIBVol > 0 ? maxVolZone / totalIBVol : 0
+        
+        intrabarAbsorption := highVolLowMove and volClusterPct >= absorptionThreshold
+        intrabarAbsorptionScore := volClusterPct
+        
+        if intrabarAbsorption
+            if intrabarVolBottom > intrabarVolTop and intrabarBuyVol > intrabarSellVol
+                intrabarBullAbsorption := true
+            else if intrabarVolTop > intrabarVolBottom and intrabarSellVol > intrabarBuyVol
+                intrabarBearAbsorption := true
+        
+        intrabarVolCluster := intrabarVolTop > intrabarVolMid and intrabarVolTop > intrabarVolBottom ? "TOP" :
+                             intrabarVolBottom > intrabarVolMid and intrabarVolBottom > intrabarVolTop ? "BOT" : "MID"
+        
+        intrabarBullInternalSweep := sweptInternalLow and isBullish
+        intrabarBearInternalSweep := sweptInternalHigh and isBearish
+        intrabarInternalSweep := intrabarBullInternalSweep or intrabarBearInternalSweep
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████  CVD & DELTA ANALYSIS (FIXED)  ██████████████████████████════
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Standard delta estimation (fallback)
+float rng = high - low
+float closePosition = rng > 0 ? (close - low) / rng : 0.5
+float openPosition = rng > 0 ? (open - low) / rng : 0.5
+
+float buyVol = volume * closePosition
+float sellVol = volume * (1 - closePosition)
+
+if isBullish
+    buyVol := buyVol * 1.15
+    sellVol := sellVol * 0.85
+else if isBearish
+    sellVol := sellVol * 1.15
+    buyVol := buyVol * 0.85
+
+// CVD with session reset
+var float cvd = 0.0
+var float cvdSessionStart = 0.0
+float barDelta = buyVol - sellVol
+
+// Reset CVD at session start for cleaner readings
+if londonStart or nyStart
+    cvdSessionStart := cvd
+
+cvd := cvd + barDelta
+float cvdSession = cvd - cvdSessionStart
+
+float totalVol = buyVol + sellVol
+float buyPct = totalVol > 0 ? buyVol / totalVol : 0.5
+float sellPct = totalVol > 0 ? sellVol / totalVol : 0.5
+
+// Use intrabar delta if available (more accurate)
+float finalBuyPct = enableIntrabar and intrabarTotalBars > 0 ? 
+     (intrabarBuyVol > intrabarSellVol ? intrabarDeltaPct : 1 - intrabarDeltaPct) : buyPct
+float finalSellPct = enableIntrabar and intrabarTotalBars > 0 ? 
+     (intrabarSellVol > intrabarBuyVol ? intrabarDeltaPct : 1 - intrabarDeltaPct) : sellPct
+
+bool buyDominant = enableIntrabar and intrabarTotalBars > 0 ? intrabarBullDominant : finalBuyPct >= deltaThreshold
+bool sellDominant = enableIntrabar and intrabarTotalBars > 0 ? intrabarBearDominant : finalSellPct >= deltaThreshold
+bool strongDelta = enableIntrabar and intrabarTotalBars > 0 ? intrabarStrongDelta : (finalBuyPct >= 0.70 or finalSellPct >= 0.70)
+bool extremeDelta = enableIntrabar and intrabarTotalBars > 0 ? intrabarExtremeDelta : (finalBuyPct >= 0.78 or finalSellPct >= 0.78)
+
+// CVD analysis (fixed with proper slope calculation)
+float cvdMA = ta.sma(cvd, 8)
+float cvdSlope = (cvd - cvd[5]) / 5  // Proper slope over 5 bars
+float cvdSlopeStdev = ta.stdev(cvdSlope, 20)
+
+bool cvdBullish = cvd > cvdMA and cvdSlope > 0
+bool cvdBearish = cvd < cvdMA and cvdSlope < 0
+bool cvdStrongBull = cvdBullish and cvdSlope > cvdSlopeStdev
+bool cvdStrongBear = cvdBearish and cvdSlope < -cvdSlopeStdev
+bool cvdExtremeBull = cvdBullish and cvdSlope > cvdSlopeStdev * 2
+bool cvdExtremeBear = cvdBearish and cvdSlope < -cvdSlopeStdev * 2
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ███████████████████  SWING HIGH/LOW DETECTION  ███████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+var array<float> swingHighs = array.new<float>()
+var array<int> swingHighBars = array.new<int>()
+var array<float> swingLows = array.new<float>()
+var array<int> swingLowBars = array.new<int>()
+
+bool isSwingHigh = high[2] > high[3] and high[2] > high[4] and high[2] > high[1] and high[2] > high[0]
+bool isSwingLow = low[2] < low[3] and low[2] < low[4] and low[2] < low[1] and low[2] < low[0]
+
+if isSwingHigh and barstate.isconfirmed
+    array.push(swingHighs, high[2])
+    array.push(swingHighBars, bar_index - 2)
+    if array.size(swingHighs) > 20
+        array.shift(swingHighs)
+        array.shift(swingHighBars)
+
+if isSwingLow and barstate.isconfirmed
+    array.push(swingLows, low[2])
+    array.push(swingLowBars, bar_index - 2)
+    if array.size(swingLows) > 20
+        array.shift(swingLows)
+        array.shift(swingLowBars)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// █████████████████  LIQUIDITY SWEEP DETECTION  ████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+var int lastBullSweepBar = 0
+var int lastBearSweepBar = 0
+var float lastBullSweepLevel = na
+var float lastBearSweepLevel = na
+var float bullSweepQuality = 0.0
+var float bearSweepQuality = 0.0
+
+bool bullishSweep = false
+bool bearishSweep = false
+
+if array.size(swingHighs) > 0
+    for i = array.size(swingHighs) - 1 to math.max(0, array.size(swingHighs) - 5)
+        float swingLevel = array.get(swingHighs, i)
+        int swingBar = array.get(swingHighBars, i)
+        int barsAgo = bar_index - swingBar
+        
+        if barsAgo >= 3 and barsAgo <= swingLookback
+            if high > swingLevel and close < swingLevel and hasUpperRejection and sellDominant
+                bearishSweep := true
+                lastBearSweepBar := bar_index
+                lastBearSweepLevel := swingLevel
+                break
+
+if array.size(swingLows) > 0
+    for i = array.size(swingLows) - 1 to math.max(0, array.size(swingLows) - 5)
+        float swingLevel = array.get(swingLows, i)
+        int swingBar = array.get(swingLowBars, i)
+        int barsAgo = bar_index - swingBar
+        
+        if barsAgo >= 3 and barsAgo <= swingLookback
+            if low < swingLevel and close > swingLevel and hasLowerRejection and buyDominant
+                bullishSweep := true
+                lastBullSweepBar := bar_index
+                lastBullSweepLevel := swingLevel
+                break
+
+bool recentBullSweep = (bar_index - lastBullSweepBar) <= maxSweepAge
+bool recentBearSweep = (bar_index - lastBearSweepBar) <= maxSweepAge
+
+// ══════════════════════════════════════════════════════════════════════════════
+// █████████████████████  ORDER BLOCK DETECTION  ████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+type OrderBlock
+    float priceTop
+    float priceBottom
+    bool isBullish
+    int barIdx
+    int state
+    float strength
+    bool hasBeenSwept
+
+var array<OrderBlock> orderBlocks = array.new<OrderBlock>()
+var array<box> obBoxes = array.new<box>()
+
+bool bullOBCondition = false
+float bullOBTop = na
+float bullOBBottom = na
+float bullOBStrength = 0.0
+
+if barstate.isconfirmed and bar_index > obLookback
+    if close[1] < open[1]
+        float moveAfter = close - close[1]
+        float moveATR = moveAfter / atr
+        
+        if moveATR >= obMinStrength and isBullish and hasVolume
+            bullOBCondition := true
+            bullOBTop := high[1]
+            bullOBBottom := low[1]
+            
+            float obVolRatio = volume[1] / avgVol
+            float obBodyRatio = math.abs(close[1] - open[1]) / (high[1] - low[1])
+            bullOBStrength := math.min(10, moveATR * 2 + obVolRatio + (obBodyRatio * 2))
+
+bool bearOBCondition = false
+float bearOBTop = na
+float bearOBBottom = na
+float bearOBStrength = 0.0
+
+if barstate.isconfirmed and bar_index > obLookback
+    if close[1] > open[1]
+        float moveAfter = close[1] - close
+        float moveATR = moveAfter / atr
+        
+        if moveATR >= obMinStrength and isBearish and hasVolume
+            bearOBCondition := true
+            bearOBTop := high[1]
+            bearOBBottom := low[1]
+            
+            float obVolRatio = volume[1] / avgVol
+            float obBodyRatio = math.abs(close[1] - open[1]) / (high[1] - low[1])
+            bearOBStrength := math.min(10, moveATR * 2 + obVolRatio + (obBodyRatio * 2))
+
+if showOrderBlocks and bullOBCondition and bullOBStrength >= 4
+    OrderBlock newOB = OrderBlock.new()
+    newOB.priceTop := bullOBTop
+    newOB.priceBottom := bullOBBottom
+    newOB.isBullish := true
+    newOB.barIdx := bar_index - 1
+    newOB.state := 0
+    newOB.strength := bullOBStrength
+    newOB.hasBeenSwept := false
+    
+    box obBox = box.new(
+         left=bar_index - 1,
+         top=bullOBTop,
+         right=bar_index + EXTEND_BARS,
+         bottom=bullOBBottom,
+         border_color=color.new(#2196F3, 50),
+         bgcolor=bullOBColor,
+         border_width=2,
+         border_style=line.style_solid)
+    
+    array.push(orderBlocks, newOB)
+    array.push(obBoxes, obBox)
+
+if showOrderBlocks and bearOBCondition and bearOBStrength >= 4
+    OrderBlock newOB = OrderBlock.new()
+    newOB.priceTop := bearOBTop
+    newOB.priceBottom := bearOBBottom
+    newOB.isBullish := false
+    newOB.barIdx := bar_index - 1
+    newOB.state := 0
+    newOB.strength := bearOBStrength
+    newOB.hasBeenSwept := false
+    
+    box obBox = box.new(
+         left=bar_index - 1,
+         top=bearOBTop,
+         right=bar_index + EXTEND_BARS,
+         bottom=bearOBBottom,
+         border_color=color.new(#E91E63, 50),
+         bgcolor=bearOBColor,
+         border_width=2,
+         border_style=line.style_solid)
+    
+    array.push(orderBlocks, newOB)
+    array.push(obBoxes, obBox)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// █████████████████  FVG & IFVG ZONE DETECTION  ████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+type FVGZone
+    float priceTop
+    float priceBottom
+    bool isBullish
+    int barIdx
+    int state
+    float quality
+    bool isIFVG
+    bool alignedWithOB
+
+var array<FVGZone> fvgZones = array.new<FVGZone>()
+var array<box> fvgBoxes = array.new<box>()
+var array<line> fvgLines = array.new<line>()
+
+bool fvgBullRaw = low > high[2]
+bool fvgBearRaw = high < low[2]
+
+float bullGapSize = fvgBullRaw ? (low - high[2]) : 0
+float bearGapSize = fvgBearRaw ? (low[2] - high) : 0
+
+bool gapSizeOK_Bull = bullGapSize >= atr * minGapATR
+bool gapSizeOK_Bear = bearGapSize >= atr * minGapATR
+
+float prevBodyRatio = (high[1] - low[1]) > 0 ? math.abs(close[1] - open[1]) / (high[1] - low[1]) : 0
+float impulseStrength = candleRange[1] / avgRange
+bool impulseOK = impulseStrength >= 1.3 and prevBodyRatio >= 0.65
+
+calcFVGQuality(float gapSize, float impulseStr, float volR, bool hasOBAlign, bool inSess, bool hasIBConfirm) =>
+    float q = 0.0
+    q += math.min(2.5, (gapSize / atr) * 5)
+    q += math.min(2.5, (impulseStr - 1) * 2)
+    q += math.min(2.0, (volR - 1) * 1.5)
+    q += hasOBAlign ? 2.0 : 0.0
+    q += inSess ? 1.0 : 0.0
+    q += hasIBConfirm ? 1.0 : 0.0
+    math.min(10.0, q)
+
+checkOBAlignment(float top, float bottom, bool bullish) =>
+    bool aligned = false
+    if array.size(orderBlocks) > 0
+        for i = 0 to math.min(array.size(orderBlocks) - 1, 10)
+            OrderBlock ob = array.get(orderBlocks, i)
+            if ob.isBullish == bullish
+                bool overlaps = not (bottom > ob.priceTop or top < ob.priceBottom)
+                if overlaps
+                    aligned := true
+                    break
+    aligned
+
+bool ibConfirmBullFVG = enableIntrabar and intrabarMomentumBull and intrabarBullDominant
+bool ibConfirmBearFVG = enableIntrabar and intrabarMomentumBear and intrabarBearDominant
+
+bool validBullFVG = fvgBullRaw and gapSizeOK_Bull and impulseOK and volume[1] >= avgVol and close[1] > open[1]
+bool validBearFVG = fvgBearRaw and gapSizeOK_Bear and impulseOK and volume[1] >= avgVol and close[1] < open[1]
+
+var bool ifvgBull = false
+var bool ifvgBear = false
+var float ifvgBullTop = na
+var float ifvgBullBottom = na
+var float ifvgBearTop = na
+var float ifvgBearBottom = na
+
+ifvgBull := false
+ifvgBear := false
+
+if array.size(fvgZones) > 0
+    for i = array.size(fvgZones) - 1 to 0
+        if i >= array.size(fvgZones)
+            continue
+        FVGZone zone = array.get(fvgZones, i)
+        
+        if not zone.isBullish and not zone.isIFVG and zone.state == 1
+            if close > zone.priceTop and buyDominant and hasVolume
+                ifvgBull := true
+                ifvgBullTop := zone.priceTop
+                ifvgBullBottom := zone.priceBottom
+        
+        if zone.isBullish and not zone.isIFVG and zone.state == 1
+            if close < zone.priceBottom and sellDominant and hasVolume
+                ifvgBear := true
+                ifvgBearTop := zone.priceTop
+                ifvgBearBottom := zone.priceBottom
+
+// Create FVG Zones
+if showFVG and barstate.isconfirmed
+    if validBullFVG
+        float topPrice = low
+        float bottomPrice = high[2]
+        float entry = (topPrice + bottomPrice) / 2
+        bool obAlign = checkOBAlignment(topPrice, bottomPrice, true)
+        float quality = calcFVGQuality(bullGapSize, impulseStrength, volRatio[1], obAlign, sessionOK, ibConfirmBullFVG)
+        
+        if quality >= zoneQualityMin
+            FVGZone newZone = FVGZone.new()
+            newZone.priceTop := topPrice
+            newZone.priceBottom := bottomPrice
+            newZone.isBullish := true
+            newZone.barIdx := bar_index
+            newZone.state := 0
+            newZone.quality := quality
+            newZone.isIFVG := false
+            newZone.alignedWithOB := obAlign
+            
+            color zoneColor = obAlign ? color.new(#00E676, 70) : bullFVGColor
+            int borderWidth = obAlign ? 2 : 1
+            
+            box zoneBox = box.new(
+                 left=bar_index - 2,
+                 top=topPrice,
+                 right=bar_index + EXTEND_BARS,
+                 bottom=bottomPrice,
+                 border_color=color.new(#00E676, 40),
+                 bgcolor=zoneColor,
+                 border_width=borderWidth)
+            line entryLine = line.new(
+                 x1=bar_index - 2,
+                 y1=entry,
+                 x2=bar_index + EXTEND_BARS,
+                 y2=entry,
+                 color=color.new(#FFFFFF, 60),
+                 style=line.style_dotted,
+                 width=1)
+            
+            array.push(fvgZones, newZone)
+            array.push(fvgBoxes, zoneBox)
+            array.push(fvgLines, entryLine)
+    
+    if validBearFVG
+        float topPrice = low[2]
+        float bottomPrice = high
+        float entry = (topPrice + bottomPrice) / 2
+        bool obAlign = checkOBAlignment(topPrice, bottomPrice, false)
+        float quality = calcFVGQuality(bearGapSize, impulseStrength, volRatio[1], obAlign, sessionOK, ibConfirmBearFVG)
+        
+        if quality >= zoneQualityMin
+            FVGZone newZone = FVGZone.new()
+            newZone.priceTop := topPrice
+            newZone.priceBottom := bottomPrice
+            newZone.isBullish := false
+            newZone.barIdx := bar_index
+            newZone.state := 0
+            newZone.quality := quality
+            newZone.isIFVG := false
+            newZone.alignedWithOB := obAlign
+            
+            color zoneColor = obAlign ? color.new(#FF5252, 70) : bearFVGColor
+            int borderWidth = obAlign ? 2 : 1
+            
+            box zoneBox = box.new(
+                 left=bar_index - 2,
+                 top=topPrice,
+                 right=bar_index + EXTEND_BARS,
+                 bottom=bottomPrice,
+                 border_color=color.new(#FF5252, 40),
+                 bgcolor=zoneColor,
+                 border_width=borderWidth)
+            line entryLine = line.new(
+                 x1=bar_index - 2,
+                 y1=entry,
+                 x2=bar_index + EXTEND_BARS,
+                 y2=entry,
+                 color=color.new(#FFFFFF, 60),
+                 style=line.style_dotted,
+                 width=1)
+            
+            array.push(fvgZones, newZone)
+            array.push(fvgBoxes, zoneBox)
+            array.push(fvgLines, entryLine)
+
+if showIFVG and barstate.isconfirmed
+    if ifvgBull and not na(ifvgBullTop)
+        float entry = (ifvgBullTop + ifvgBullBottom) / 2
+        
+        FVGZone newZone = FVGZone.new()
+        newZone.priceTop := ifvgBullTop
+        newZone.priceBottom := ifvgBullBottom
+        newZone.isBullish := true
+        newZone.barIdx := bar_index
+        newZone.state := 0
+        newZone.quality := 8.0
+        newZone.isIFVG := true
+        newZone.alignedWithOB := false
+        
+        box zoneBox = box.new(
+             left=bar_index,
+             top=ifvgBullTop,
+             right=bar_index + EXTEND_BARS,
+             bottom=ifvgBullBottom,
+             border_color=color.new(#9C27B0, 30),
+             bgcolor=ifvgColor,
+             border_width=2,
+             border_style=line.style_dashed)
+        line entryLine = line.new(
+             x1=bar_index,
+             y1=entry,
+             x2=bar_index + EXTEND_BARS,
+             y2=entry,
+             color=color.new(#9C27B0, 40),
+             style=line.style_dotted,
+             width=1)
+        
+        array.push(fvgZones, newZone)
+        array.push(fvgBoxes, zoneBox)
+        array.push(fvgLines, entryLine)
+    
+    if ifvgBear and not na(ifvgBearTop)
+        float entry = (ifvgBearTop + ifvgBearBottom) / 2
+        
+        FVGZone newZone = FVGZone.new()
+        newZone.priceTop := ifvgBearTop
+        newZone.priceBottom := ifvgBearBottom
+        newZone.isBullish := false
+        newZone.barIdx := bar_index
+        newZone.state := 0
+        newZone.quality := 8.0
+        newZone.isIFVG := true
+        newZone.alignedWithOB := false
+        
+        box zoneBox = box.new(
+             left=bar_index,
+             top=ifvgBearTop,
+             right=bar_index + EXTEND_BARS,
+             bottom=ifvgBearBottom,
+             border_color=color.new(#9C27B0, 30),
+             bgcolor=ifvgColor,
+             border_width=2,
+             border_style=line.style_dashed)
+        line entryLine = line.new(
+             x1=bar_index,
+             y1=entry,
+             x2=bar_index + EXTEND_BARS,
+             y2=entry,
+             color=color.new(#9C27B0, 40),
+             style=line.style_dotted,
+             width=1)
+        
+        array.push(fvgZones, newZone)
+        array.push(fvgBoxes, zoneBox)
+        array.push(fvgLines, entryLine)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// █████████████████████  ZONE STATE MANAGEMENT  ████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+var bool atBullZone = false
+var bool atBearZone = false
+var bool atBullOB = false
+var bool atBearOB = false
+var bool atIFVG = false
+var float currentZoneQuality = 0.0
+
+atBullZone := false
+atBearZone := false
+atBullOB := false
+atBearOB := false
+atIFVG := false
+currentZoneQuality := 0.0
+
+if array.size(fvgZones) > 0
+    for i = array.size(fvgZones) - 1 to 0
+        if i >= array.size(fvgZones)
+            continue
+            
+        FVGZone zone = array.get(fvgZones, i)
+        int age = bar_index - zone.barIdx
+        
+        if age > maxZoneAge or zone.state >= 2
+            if i < array.size(fvgBoxes)
+                box.delete(array.get(fvgBoxes, i))
+                array.remove(fvgBoxes, i)
+            if i < array.size(fvgLines)
+                line.delete(array.get(fvgLines, i))
+                array.remove(fvgLines, i)
+            array.remove(fvgZones, i)
+            continue
+        
+        bool inZone = close >= zone.priceBottom and close <= zone.priceTop
+        
+        if zone.state < 2
+            if zone.isBullish
+                if inZone
+                    atBullZone := true
+                    currentZoneQuality := math.max(currentZoneQuality, zone.quality)
+                    if zone.isIFVG
+                        atIFVG := true
+            else
+                if inZone
+                    atBearZone := true
+                    currentZoneQuality := math.max(currentZoneQuality, zone.quality)
+                    if zone.isIFVG
+                        atIFVG := true
+        
+        float midPoint = (zone.priceTop + zone.priceBottom) / 2
+        if zone.isBullish
+            if zone.state == 0 and low <= midPoint
+                zone.state := 1
+                if i < array.size(fvgBoxes)
+                    box.set_bgcolor(array.get(fvgBoxes, i), color.new(#78909C, 85))
+            if zone.state < 2 and close < zone.priceBottom
+                zone.state := 2
+        else
+            if zone.state == 0 and high >= midPoint
+                zone.state := 1
+                if i < array.size(fvgBoxes)
+                    box.set_bgcolor(array.get(fvgBoxes, i), color.new(#78909C, 85))
+            if zone.state < 2 and close > zone.priceTop
+                zone.state := 2
+
+if array.size(orderBlocks) > 0
+    for i = array.size(orderBlocks) - 1 to 0
+        if i >= array.size(orderBlocks)
+            continue
+            
+        OrderBlock ob = array.get(orderBlocks, i)
+        int age = bar_index - ob.barIdx
+        
+        if age > maxZoneAge or ob.state >= 2
+            if i < array.size(obBoxes)
+                box.delete(array.get(obBoxes, i))
+                array.remove(obBoxes, i)
+            array.remove(orderBlocks, i)
+            continue
+        
+        bool inOB = close >= ob.priceBottom and close <= ob.priceTop
+        
+        if ob.state < 2
+            if ob.isBullish and inOB
+                atBullOB := true
+            else if not ob.isBullish and inOB
+                atBearOB := true
+        
+        float midPoint = (ob.priceTop + ob.priceBottom) / 2
+        if ob.isBullish
+            if ob.state == 0 and low <= midPoint
+                ob.state := 1
+                if i < array.size(obBoxes)
+                    box.set_bgcolor(array.get(obBoxes, i), color.new(#2196F3, 85))
+            if ob.state < 2 and close < ob.priceBottom
+                ob.state := 2
+        else
+            if ob.state == 0 and high >= midPoint
+                ob.state := 1
+                if i < array.size(obBoxes)
+                    box.set_bgcolor(array.get(obBoxes, i), color.new(#E91E63, 85))
+            if ob.state < 2 and close > ob.priceTop
+                ob.state := 2
+
+while array.size(fvgZones) > maxZones
+    if array.size(fvgBoxes) > 0
+        box.delete(array.get(fvgBoxes, 0))
+        array.remove(fvgBoxes, 0)
+    if array.size(fvgLines) > 0
+        line.delete(array.get(fvgLines, 0))
+        array.remove(fvgLines, 0)
+    if array.size(fvgZones) > 0
+        array.remove(fvgZones, 0)
+
+while array.size(orderBlocks) > maxOrderBlocks
+    if array.size(obBoxes) > 0
+        box.delete(array.get(obBoxes, 0))
+        array.remove(obBoxes, 0)
+    if array.size(orderBlocks) > 0
+        array.remove(orderBlocks, 0)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ██████████████  CONFLUENCE SCORING v8 (COMPLETELY REBUILT)  ██████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+// The score is calculated ADDITIVELY - each factor adds points
+// No gating - we calculate score for any candle, then filter by threshold
+
+float longRawScore = 0.0
+float shortRawScore = 0.0
+
+// ═══ LONG SCORE CALCULATION ═══
+if isBullish
+    // TIER (0-3 points)
+    longRawScore += tierScore
+    
+    // ZONE CONFLUENCE (0-3 points)
+    longRawScore += atBullZone ? 1.5 : 0.0
+    longRawScore += atBullOB ? 1.5 : 0.0
+    longRawScore += atIFVG ? 1.0 : 0.0
+    
+    // VOLUME (0-2 points)
+    if hasVolume
+        longRawScore += 0.5
+    if hasStrongVolume
+        longRawScore += 0.75
+    if hasExtremeVolume
+        longRawScore += 0.75
+    
+    // DELTA DOMINANCE (0-2 points)
+    if buyDominant
+        longRawScore += 1.0
+    if strongDelta
+        longRawScore += 0.5
+    if extremeDelta
+        longRawScore += 0.5
+    
+    // CVD CONFIRMATION (0-1.5 points)
+    if cvdBullish
+        longRawScore += 0.5
+    if cvdStrongBull
+        longRawScore += 0.5
+    if cvdExtremeBull
+        longRawScore += 0.5
+    
+    // CANDLE QUALITY (0-1.5 points)
+    if hasStrongBody
+        longRawScore += 0.5
+    if hasSignificantRange
+        longRawScore += 0.5
+    if wicksOK
+        longRawScore += 0.5
+    
+    // LIQUIDITY SWEEP (0-2 points)
+    if recentBullSweep
+        longRawScore += 1.5
+    if bullishSweep  // Current bar sweep
+        longRawScore += 0.5
+    
+    // SESSION (0-1 point)
+    if inSession
+        longRawScore += 1.0
+    
+    // ═══ INTRABAR CONFLUENCE (0-5 points) ═══
+    if enableIntrabar and intrabarTotalBars > 0
+        // Intrabar Delta (0-2 points)
+        if intrabarBullDominant
+            longRawScore += 1.0
+            if intrabarStrongDelta
+                longRawScore += 0.5
+            if intrabarExtremeDelta
+                longRawScore += 0.5
+        
+        // Intrabar Momentum (0-1 point)
+        if intrabarMomentumBull
+            longRawScore += 0.5
+            if intrabarMomentumStrong
+                longRawScore += 0.5
+        
+        // Absorption (0-1 point)
+        if intrabarBullAbsorption
+            longRawScore += 1.0
+        
+        // Internal Sweep (0-0.5 point)
+        if intrabarBullInternalSweep
+            longRawScore += 0.5
+        
+        // Volume Cluster (0-0.5 point)
+        if intrabarVolCluster == "BOT"
+            longRawScore += 0.5
+
+// ═══ SHORT SCORE CALCULATION ═══
+if isBearish
+    // TIER (0-3 points)
+    shortRawScore += tierScore
+    
+    // ZONE CONFLUENCE (0-3 points)
+    shortRawScore += atBearZone ? 1.5 : 0.0
+    shortRawScore += atBearOB ? 1.5 : 0.0
+    shortRawScore += atIFVG ? 1.0 : 0.0
+    
+    // VOLUME (0-2 points)
+    if hasVolume
+        shortRawScore += 0.5
+    if hasStrongVolume
+        shortRawScore += 0.75
+    if hasExtremeVolume
+        shortRawScore += 0.75
+    
+    // DELTA DOMINANCE (0-2 points)
+    if sellDominant
+        shortRawScore += 1.0
+    if strongDelta
+        shortRawScore += 0.5
+    if extremeDelta
+        shortRawScore += 0.5
+    
+    // CVD CONFIRMATION (0-1.5 points)
+    if cvdBearish
+        shortRawScore += 0.5
+    if cvdStrongBear
+        shortRawScore += 0.5
+    if cvdExtremeBear
+        shortRawScore += 0.5
+    
+    // CANDLE QUALITY (0-1.5 points)
+    if hasStrongBody
+        shortRawScore += 0.5
+    if hasSignificantRange
+        shortRawScore += 0.5
+    if wicksOK
+        shortRawScore += 0.5
+    
+    // LIQUIDITY SWEEP (0-2 points)
+    if recentBearSweep
+        shortRawScore += 1.5
+    if bearishSweep
+        shortRawScore += 0.5
+    
+    // SESSION (0-1 point)
+    if inSession
+        shortRawScore += 1.0
+    
+    // ═══ INTRABAR CONFLUENCE (0-5 points) ═══
+    if enableIntrabar and intrabarTotalBars > 0
+        if intrabarBearDominant
+            shortRawScore += 1.0
+            if intrabarStrongDelta
+                shortRawScore += 0.5
+            if intrabarExtremeDelta
+                shortRawScore += 0.5
+        
+        if intrabarMomentumBear
+            shortRawScore += 0.5
+            if intrabarMomentumStrong
+                shortRawScore += 0.5
+        
+        if intrabarBearAbsorption
+            shortRawScore += 1.0
+        
+        if intrabarBearInternalSweep
+            shortRawScore += 0.5
+        
+        if intrabarVolCluster == "TOP"
+            shortRawScore += 0.5
+
+// Normalize to 10 (max possible raw ~22, so divide by 2.2)
+float longConfluence = math.min(10.0, longRawScore / 2.2 * 10)
+float shortConfluence = math.min(10.0, shortRawScore / 2.2 * 10)
+
+// Score classification
+string longScoreClass = longConfluence >= minScoreGodMode ? "GOD MODE" : longConfluence >= minScoreExcellent ? "EXCELLENT" : longConfluence >= minScoreMedium ? "MEDIUM" : longConfluence >= minScoreSignal ? "WEAK" : "—"
+string shortScoreClass = shortConfluence >= minScoreGodMode ? "GOD MODE" : shortConfluence >= minScoreExcellent ? "EXCELLENT" : shortConfluence >= minScoreMedium ? "MEDIUM" : shortConfluence >= minScoreSignal ? "WEAK" : "—"
+
+// Final signals - require minimum score
+bool longSignal = isBullish and longConfluence >= minScoreSignal
+bool shortSignal = isBearish and shortConfluence >= minScoreSignal
+
+bool sLong = longSignal and isTierS
+bool aLong = longSignal and isTierA
+bool bLong = longSignal and isTierB
+
+bool sShort = shortSignal and isTierS
+bool aShort = shortSignal and isTierA
+bool bShort = shortSignal and isTierB
+
+// Zone entry signals (non-tier but in a quality zone)
+bool dfzBuyEntry = not longSignal and (atBullZone or atBullOB) and buyDominant and hasVolume and sessionOK and currentZoneQuality >= 6.0
+bool dfzSellEntry = not shortSignal and (atBearZone or atBearOB) and sellDominant and hasVolume and sessionOK and currentZoneQuality >= 6.0
+
+// God Mode signals
+bool godModeLong = longSignal and longConfluence >= minScoreGodMode
+bool godModeShort = shortSignal and shortConfluence >= minScoreGodMode
+
+// ══════════════════════════════════════════════════════════════════════════════
+// █████████████████  SWEEP/ABSORPTION QUALITY FILTER  ██████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Calculate sweep quality score
+float bullSweepQualityScore = 0.0
+float bearSweepQualityScore = 0.0
+float bullAbsorptionQualityScore = 0.0
+float bearAbsorptionQualityScore = 0.0
+
+if bullishSweep
+    bullSweepQualityScore += atBullZone ? 1.5 : 0.0
+    bullSweepQualityScore += atBullOB ? 1.5 : 0.0
+    bullSweepQualityScore += hasStrongVolume ? 1.0 : 0.0
+    bullSweepQualityScore += inSession ? 0.5 : 0.0
+    bullSweepQualityScore += intrabarBullDominant ? 1.0 : 0.0
+
+if bearishSweep
+    bearSweepQualityScore += atBearZone ? 1.5 : 0.0
+    bearSweepQualityScore += atBearOB ? 1.5 : 0.0
+    bearSweepQualityScore += hasStrongVolume ? 1.0 : 0.0
+    bearSweepQualityScore += inSession ? 0.5 : 0.0
+    bearSweepQualityScore += intrabarBearDominant ? 1.0 : 0.0
+
+if intrabarBullAbsorption
+    bullAbsorptionQualityScore += atBullZone ? 1.5 : 0.0
+    bullAbsorptionQualityScore += atBullOB ? 1.5 : 0.0
+    bullAbsorptionQualityScore += isTiered ? 1.0 : 0.0
+    bullAbsorptionQualityScore += inSession ? 0.5 : 0.0
+    bullAbsorptionQualityScore += cvdBullish ? 0.5 : 0.0
+
+if intrabarBearAbsorption
+    bearAbsorptionQualityScore += atBearZone ? 1.5 : 0.0
+    bearAbsorptionQualityScore += atBearOB ? 1.5 : 0.0
+    bearAbsorptionQualityScore += isTiered ? 1.0 : 0.0
+    bearAbsorptionQualityScore += inSession ? 0.5 : 0.0
+    bearAbsorptionQualityScore += cvdBearish ? 0.5 : 0.0
+
+// Filter conditions
+bool showBullSweep = showLiqSweeps and bullishSweep and (not onlyQualitySweeps or bullSweepQualityScore >= minSweepScore)
+bool showBearSweep = showLiqSweeps and bearishSweep and (not onlyQualitySweeps or bearSweepQualityScore >= minSweepScore)
+bool showBullAbsorption = enableIntrabar and intrabarBullAbsorption and (not onlyQualityAbsorption or bullAbsorptionQualityScore >= minAbsorptionScore)
+bool showBearAbsorption = enableIntrabar and intrabarBearAbsorption and (not onlyQualityAbsorption or bearAbsorptionQualityScore >= minAbsorptionScore)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// █████████████████████  STOP/TARGET CALCULATION  ██████════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+
+float longStop = na
+float shortStop = na
+float longTarget = na
+float shortTarget = na
+
+if longSignal
+    longStop := low - TICK_VALUE * 2
+    float riskPts = close - longStop
+    float rewardMult = isTierS ? 2.5 : isTierA ? 2.0 : 1.5
+    if longConfluence >= minScoreGodMode
+        rewardMult += 1.0  // God mode = bigger targets
+    else if longConfluence >= minScoreExcellent
+        rewardMult += 0.5
+    if enableIntrabar and intrabarBullAbsorption
+        rewardMult += 0.3
+    longTarget := close + (riskPts * rewardMult)
+
+if shortSignal
+    shortStop := high + TICK_VALUE * 2
+    float riskPts = shortStop - close
+    float rewardMult = isTierS ? 2.5 : isTierA ? 2.0 : 1.5
+    if shortConfluence >= minScoreGodMode
+        rewardMult += 1.0
+    else if shortConfluence >= minScoreExcellent
+        rewardMult += 0.5
+    if enableIntrabar and intrabarBearAbsorption
+        rewardMult += 0.3
+    shortTarget := close - (riskPts * rewardMult)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// █████████████████████████████  VISUALIZATION  ████████████████████████████████
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ═══ INTRABAR CONFIG WARNING ═══
+// Show persistent warning label if intrabar is enabled but TF is invalid
+var label ibWarningLabel = na
+if enableIntrabar and barstate.islast
+    if intrabarTotalBars == 0
+        if na(ibWarningLabel)
+            ibWarningLabel := label.new(bar_index, high, "⚠️ INTRABAR TF INVALID\nSelect lower TF than chart!\nChart: " + timeframe.period + " | IB: " + intrabarTF, 
+                 style=label.style_label_down, color=color.rgb(255, 193, 7), textcolor=color.black, size=size.normal)
+        else
+            label.set_xy(ibWarningLabel, bar_index, high)
+            label.set_text(ibWarningLabel, "⚠️ INTRABAR TF INVALID\nSelect lower TF than chart!\nChart: " + timeframe.period + " | IB: " + intrabarTF)
+    else
+        if not na(ibWarningLabel)
+            label.delete(ibWarningLabel)
+            ibWarningLabel := na
+
+// God Mode special markers (highest priority) - CLEAN: just ⚡, small size
+plotshape(godModeLong, "GOD LONG", shape.triangleup, location.belowbar, godModeColor, size=size.small, text="⚡", textcolor=color.white)
+plotshape(godModeShort, "GOD SHORT", shape.triangledown, location.abovebar, godModeColor, size=size.small, text="⚡", textcolor=color.white)
+
+// Tier Signal Markers (only show if not God Mode) - ALL SMALL
+plotshape(sLong and not godModeLong, "S Long", shape.triangleup, location.belowbar, sTierColor, size=size.small, text="S", textcolor=color.white)
+plotshape(aLong and not godModeLong, "A Long", shape.triangleup, location.belowbar, aTierColor, size=size.small, text="A", textcolor=color.white)
+plotshape(bLong and not godModeLong, "B Long", shape.triangleup, location.belowbar, bTierColor, size=size.small, text="B", textcolor=color.white)
+
+plotshape(sShort and not godModeShort, "S Short", shape.triangledown, location.abovebar, sTierColor, size=size.small, text="S", textcolor=color.white)
+plotshape(aShort and not godModeShort, "A Short", shape.triangledown, location.abovebar, aTierColor, size=size.small, text="A", textcolor=color.white)
+plotshape(bShort and not godModeShort, "B Short", shape.triangledown, location.abovebar, bTierColor, size=size.small, text="B", textcolor=color.white)
+
+// Zone Entry Signals
+plotshape(dfzBuyEntry, "Zone Buy", shape.labelup, location.belowbar, color.new(#00E676, 0), text="Z", textcolor=color.white, size=size.tiny)
+plotshape(dfzSellEntry, "Zone Sell", shape.labeldown, location.abovebar, color.new(#FF5252, 0), text="Z", textcolor=color.white, size=size.tiny)
+
+// FILTERED Liquidity Sweep Markers - tiny, no text
+plotshape(showBullSweep, "Bull Sweep", shape.diamond, location.belowbar, sweepBullColor, size=size.tiny, text="", textcolor=color.white)
+plotshape(showBearSweep, "Bear Sweep", shape.diamond, location.abovebar, sweepBearColor, size=size.tiny, text="", textcolor=color.white)
+
+// FILTERED Internal Sweep Markers - tiny, no text
+bool showIBBullSweep = enableIntrabar and intrabarBullInternalSweep and not bullishSweep and (atBullZone or atBullOB or isTiered)
+bool showIBBearSweep = enableIntrabar and intrabarBearInternalSweep and not bearishSweep and (atBearZone or atBearOB or isTiered)
+plotshape(showIBBullSweep, "IB Bull Sweep", shape.circle, location.belowbar, intrabarBullColor, size=size.tiny, text="", textcolor=color.white)
+plotshape(showIBBearSweep, "IB Bear Sweep", shape.circle, location.abovebar, intrabarBearColor, size=size.tiny, text="", textcolor=color.white)
+
+// FILTERED Absorption Markers
+plotshape(showBullAbsorption, "Bull Absorption", shape.xcross, location.belowbar, intrabarBullColor, size=size.tiny)
+plotshape(showBearAbsorption, "Bear Absorption", shape.xcross, location.abovebar, intrabarBearColor, size=size.tiny)
+
+// Session Markers
+plotshape(londonStart, "LDN", shape.circle, location.abovebar, color.new(#2196F3, 0), size=size.tiny)
+plotshape(nyStart, "NY", shape.circle, location.abovebar, color.new(#4CAF50, 0), size=size.tiny)
+plotshape(powerHourStart, "PWR", shape.circle, location.abovebar, color.new(#FF9800, 0), size=size.tiny)
+
+// Session backgrounds
+bgcolor(inLondon ? color.new(#2196F3, 95) : na, title="London BG")
+bgcolor(inNY ? color.new(#4CAF50, 95) : na, title="NY BG")
+bgcolor(inPowerHour ? color.new(#FF9800, 95) : na, title="Power Hour BG")
+
+// Stop/Target lines
+plot(longSignal ? longStop : na, "Long Stop", color.new(#FF5252, 0), 2, plot.style_linebr)
+plot(longSignal ? longTarget : na, "Long Target", color.new(#00E676, 0), 2, plot.style_linebr)
+plot(shortSignal ? shortStop : na, "Short Stop", color.new(#FF5252, 0), 2, plot.style_linebr)
+plot(shortSignal ? shortTarget : na, "Short Target", color.new(#00E676, 0), 2, plot.style_linebr)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ████████████████████████  SOLID INFO TABLE v8  ██████════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+
+tablePosition = switch tablePos
+    "Top Right" => position.top_right
+    "Top Left" => position.top_left
+    "Bottom Right" => position.bottom_right
+    "Bottom Left" => position.bottom_left
+    "Top Center" => position.top_center
+    "Bottom Center" => position.bottom_center
+    => position.top_right
+
+tSize = switch tableSize
+    "tiny" => size.tiny
+    "small" => size.small
+    "normal" => size.normal
+    "large" => size.large
+    => size.normal
+
+tSizeSmall = switch tableSize
+    "tiny" => size.tiny
+    "small" => size.tiny
+    "normal" => size.small
+    "large" => size.normal
+    => size.small
+
+// SOLID TABLE - HIGH OPACITY for black background
+int tableRows = showIntrabarMetrics and enableIntrabar ? 18 : 14
+var table panel = table.new(tablePosition, 3, tableRows, 
+     bgcolor=color.rgb(15, 15, 20),        // Dark solid background
+     border_color=color.rgb(60, 60, 80),   // Visible border
+     border_width=2)
+
+// Table color constants - HIGH OPACITY for black background
+var color TBL_HEADER_BG = color.rgb(30, 30, 45)       // Header background
+var color TBL_CELL_BG = color.rgb(20, 20, 30)         // Cell background  
+var color TBL_TEXT_DIM = color.rgb(150, 150, 170)     // Dim text
+var color TBL_TEXT_BRIGHT = color.rgb(220, 220, 240)  // Bright text
+
+// Quality-based score colors - DISTINCT on black
+var color QUAL_GOD = color.rgb(0, 255, 255)           // Cyan - GOD MODE (9+)
+var color QUAL_EXCELLENT = color.rgb(0, 255, 100)     // Bright green - EXCELLENT (8+)
+var color QUAL_MEDIUM = color.rgb(255, 200, 0)        // Gold/Yellow - MEDIUM (5+)
+var color QUAL_WEAK = color.rgb(255, 80, 80)          // Red - below threshold
+
+// Score background shades (quality-based)
+var color QUAL_BG_GOD = color.rgb(0, 80, 80)          // Dark cyan bg
+var color QUAL_BG_EXCELLENT = color.rgb(0, 60, 30)    // Dark green bg
+var color QUAL_BG_MEDIUM = color.rgb(60, 50, 0)       // Dark gold bg
+var color QUAL_BG_WEAK = color.rgb(50, 20, 20)        // Dark red bg
+
+// Track row offset for conditional intrabar section
+int rowOffset = 0
+
+// Active score for display
+float activeScore = isBullish ? longConfluence : isBearish ? shortConfluence : 0.0
+string activeScoreClass = isBullish ? longScoreClass : isBearish ? shortScoreClass : "—"
+
+if barstate.islast
+    // ═══ HEADER ═══
+    table.cell(panel, 0, 0, "YM SNIPER v8", text_color=QUAL_GOD, text_size=tSize, bgcolor=TBL_HEADER_BG)
+    table.merge_cells(panel, 0, 0, 2, 0)
+    
+    // ═══ PRICE ACTION SECTION ═══
+    table.cell(panel, 0, 1, "══ ORDERFLOW ══", text_color=TBL_TEXT_DIM, text_size=tSizeSmall, bgcolor=TBL_HEADER_BG)
+    table.merge_cells(panel, 0, 1, 2, 1)
+    
+    string tierStr = isTierS ? "S-TIER" : isTierA ? "A-TIER" : isTierB ? "B-TIER" : "—"
+    color tierCol = isTierS ? sTierColor : isTierA ? aTierColor : isTierB ? bTierColor : TBL_TEXT_DIM
+    table.cell(panel, 0, 2, "Tier", text_color=TBL_TEXT_DIM, text_size=tSizeSmall, bgcolor=TBL_CELL_BG)
+    table.cell(panel, 1, 2, tierStr, text_color=tierCol, text_size=tSize, bgcolor=TBL_CELL_BG)
+    table.cell(panel, 2, 2, str.tostring(candlePoints, "#.#") + " pts", text_color=tierCol, text_size=tSizeSmall, bgcolor=TBL_CELL_BG)
+    
+    string volStr = hasExtremeVolume ? "EXTREME" : hasStrongVolume ? "STRONG" : hasVolume ? "OK" : "LOW"
+    color volCol = hasExtremeVolume ? QUAL_GOD : hasStrongVolume ? QUAL_EXCELLENT : hasVolume ? QUAL_MEDIUM : QUAL_WEAK
+    table.cell(panel, 0, 3, "Volume", text_color=TBL_TEXT_DIM, text_size=tSizeSmall, bgcolor=TBL_CELL_BG)
+    table.cell(panel, 1, 3, volStr, text_color=volCol, text_size=tSize, bgcolor=TBL_CELL_BG)
+    table.cell(panel, 2, 3, str.tostring(volRatio, "#.#") + "x", text_color=volCol, text_size=tSizeSmall, bgcolor=TBL_CELL_BG)
+    
+    string deltaStr = buyDominant ? "BUY " + str.tostring(finalBuyPct * 100, "#") + "%" : 
+                      sellDominant ? "SELL " + str.tostring(finalSellPct * 100, "#") + "%" : "NEUTRAL"
+    color deltaCol = buyDominant ? (extremeDelta ? QUAL_GOD : strongDelta ? QUAL_EXCELLENT : QUAL_MEDIUM) : 
+                     sellDominant ? (extremeDelta ? color.rgb(255, 50, 50) : strongDelta ? color.rgb(255, 100, 100) : color.rgb(255, 150, 100)) : TBL_TEXT_DIM
+    table.cell(panel, 0, 4, "Delta", text_color=TBL_TEXT_DIM, text_size=tSizeSmall, bgcolor=TBL_CELL_BG)
+    table.cell(panel, 1, 4, deltaStr, text_color=deltaCol, text_size=tSize, bgcolor=TBL_CELL_BG)
+    table.cell(panel, 2, 4, extremeDelta ? "🔥" : strongDelta ? "✓✓" : buyDominant or sellDominant ? "✓" : "—", text_color=deltaCol, text_size=tSize, bgcolor=TBL_CELL_BG)
+    
+    string cvdStr = cvdExtremeBull ? "🔥 BULL" : cvdExtremeBear ? "🔥 BEAR" : cvdStrongBull ? "↑ BULL" : cvdStrongBear ? "↓ BEAR" : cvdBullish ? "bull" : cvdBearish ? "bear" : "—"
+    color cvdCol = cvdBullish ? (cvdExtremeBull ? QUAL_GOD : QUAL_EXCELLENT) : cvdBearish ? (cvdExtremeBear ? color.rgb(255, 50, 50) : color.rgb(255, 100, 100)) : TBL_TEXT_DIM
+    table.cell(panel, 0, 5, "CVD", text_color=TBL_TEXT_DIM, text_size=tSizeSmall, bgcolor=TBL_CELL_BG)
+    table.cell(panel, 1, 5, cvdStr, text_color=cvdCol, text_size=tSize, bgcolor=TBL_CELL_BG)
+    table.cell(panel, 2, 5, cvdStrongBull or cvdStrongBear ? "✓" : "", text_color=cvdCol, text_size=tSize, bgcolor=TBL_CELL_BG)
+    
+    // ═══ INTRABAR SECTION (if enabled) ═══
+    if showIntrabarMetrics and enableIntrabar
+        table.cell(panel, 0, 6, "══ INTRABAR ══", text_color=TBL_TEXT_DIM, text_size=tSizeSmall, bgcolor=TBL_HEADER_BG)
+        table.merge_cells(panel, 0, 6, 2, 6)
+        
+        // Show warning if intrabar TF is invalid (not lower than chart TF)
+        string ibBarsStr = intrabarTotalBars > 0 ? str.tostring(intrabarTotalBars) + " bars" : "⚠️ INVALID TF"
+        string ibStatusIcon = intrabarTotalBars > 0 ? "✓" : "⚠️"
+        color ibStatusCol = intrabarTotalBars > 0 ? QUAL_EXCELLENT : QUAL_MEDIUM
+        color ibStatusBg = intrabarTotalBars > 0 ? TBL_CELL_BG : color.rgb(60, 50, 0)
+        table.cell(panel, 0, 7, "IB Data", text_color=TBL_TEXT_DIM, text_size=tSizeSmall, bgcolor=ibStatusBg)
+        table.cell(panel, 1, 7, ibBarsStr, text_color=ibStatusCol, text_size=tSize, bgcolor=ibStatusBg)
+        table.cell(panel, 2, 7, ibStatusIcon, text_color=ibStatusCol, text_size=tSize, bgcolor=ibStatusBg)
+        
+        string ibDeltaStr = intrabarBullDominant ? str.tostring(intrabarDeltaPct * 100, "#") + "% BUY" :
+                           intrabarBearDominant ? str.tostring(intrabarDeltaPct * 100, "#") + "% SELL" : "NEUTRAL"
+        color ibDeltaCol = intrabarExtremeDelta ? (intrabarBullDominant ? QUAL_GOD : color.rgb(255, 50, 50)) : 
+                          intrabarStrongDelta ? (intrabarBullDominant ? QUAL_EXCELLENT : color.rgb(255, 100, 100)) :
+                          (intrabarBullDominant or intrabarBearDominant) ? (intrabarBullDominant ? QUAL_MEDIUM : color.rgb(255, 150, 100)) : TBL_TEXT_DIM
+        table.cell(panel, 0, 8, "IB Delta", text_color=TBL_TEXT_DIM, text_size=tSizeSmall, bgcolor=TBL_CELL_BG)
+        table.cell(panel, 1, 8, ibDeltaStr, text_color=ibDeltaCol, text_size=tSize, bgcolor=TBL_CELL_BG)
+        string ibDeltaGrade = intrabarExtremeDelta ? "🔥" : intrabarStrongDelta ? "✓✓" : (intrabarBullDominant or intrabarBearDominant) ? "✓" : "—"
+        table.cell(panel, 2, 8, ibDeltaGrade, text_color=ibDeltaCol, text_size=tSize, bgcolor=TBL_CELL_BG)
+        
+        string ibMomStr = intrabarMomentumBull ? str.tostring(intrabarMomentum * 100, "#") + "% BULL" :
+                         intrabarMomentumBear ? str.tostring(intrabarMomentum * 100, "#") + "% BEAR" : "MIXED"
+        color ibMomCol = intrabarMomentumStrong ? (intrabarMomentumBull ? QUAL_GOD : color.rgb(255, 50, 50)) : intrabarMomentumBull ? QUAL_EXCELLENT : intrabarMomentumBear ? color.rgb(255, 100, 100) : TBL_TEXT_DIM
+        table.cell(panel, 0, 9, "IB Momentum", text_color=TBL_TEXT_DIM, text_size=tSizeSmall, bgcolor=TBL_CELL_BG)
+        table.cell(panel, 1, 9, ibMomStr, text_color=ibMomCol, text_size=tSize, bgcolor=TBL_CELL_BG)
+        table.cell(panel, 2, 9, intrabarMomentumStrong ? "🔥" : (intrabarMomentumBull or intrabarMomentumBear) ? "✓" : "—", text_color=ibMomCol, text_size=tSize, bgcolor=TBL_CELL_BG)
+        
+        string absStr = intrabarBullAbsorption ? "BULL ABS" : intrabarBearAbsorption ? "BEAR ABS" : "—"
+        color absCol = intrabarAbsorption ? (intrabarBullAbsorption ? QUAL_GOD : color.rgb(255, 80, 80)) : TBL_TEXT_DIM
+        table.cell(panel, 0, 10, "Absorption", text_color=TBL_TEXT_DIM, text_size=tSizeSmall, bgcolor=TBL_CELL_BG)
+        table.cell(panel, 1, 10, absStr, text_color=absCol, text_size=tSize, bgcolor=TBL_CELL_BG)
+        table.cell(panel, 2, 10, intrabarAbsorption ? "🎯" : "", text_color=absCol, text_size=tSize, bgcolor=TBL_CELL_BG)
+        
+        rowOffset := 4
+    
+    // ═══ STRUCTURE SECTION ═══
+    table.cell(panel, 0, 7 + rowOffset, "══ STRUCTURE ══", text_color=TBL_TEXT_DIM, text_size=tSizeSmall, bgcolor=TBL_HEADER_BG)
+    table.merge_cells(panel, 0, 7 + rowOffset, 2, 7 + rowOffset)
+    
+    string zoneStatus = atIFVG ? "IFVG" : atBullZone ? "BULL FVG" : atBearZone ? "BEAR FVG" : "—"
+    color zoneCol = atIFVG ? color.rgb(180, 100, 255) : atBullZone ? QUAL_EXCELLENT : atBearZone ? color.rgb(255, 100, 100) : TBL_TEXT_DIM
+    table.cell(panel, 0, 8 + rowOffset, "FVG Zone", text_color=TBL_TEXT_DIM, text_size=tSizeSmall, bgcolor=TBL_CELL_BG)
+    table.cell(panel, 1, 8 + rowOffset, zoneStatus, text_color=zoneCol, text_size=tSize, bgcolor=TBL_CELL_BG)
+    table.cell(panel, 2, 8 + rowOffset, currentZoneQuality > 0 ? str.tostring(currentZoneQuality, "#.#") : "", text_color=zoneCol, text_size=tSizeSmall, bgcolor=TBL_CELL_BG)
+    
+    string obStatus = atBullOB ? "BULL OB" : atBearOB ? "BEAR OB" : "—"
+    color obCol = atBullOB ? color.rgb(30, 144, 255) : atBearOB ? color.rgb(255, 20, 147) : TBL_TEXT_DIM
+    table.cell(panel, 0, 9 + rowOffset, "Order Block", text_color=TBL_TEXT_DIM, text_size=tSizeSmall, bgcolor=TBL_CELL_BG)
+    table.cell(panel, 1, 9 + rowOffset, obStatus, text_color=obCol, text_size=tSize, bgcolor=TBL_CELL_BG)
+    table.cell(panel, 2, 9 + rowOffset, atBullOB or atBearOB ? "✓" : "", text_color=obCol, text_size=tSize, bgcolor=TBL_CELL_BG)
+    
+    string sweepStatus = recentBullSweep ? "BULL LS↑" : recentBearSweep ? "BEAR LS↓" : intrabarBullInternalSweep ? "iS↑" : intrabarBearInternalSweep ? "iS↓" : "—"
+    color sweepCol = recentBullSweep ? sweepBullColor : recentBearSweep ? sweepBearColor : intrabarInternalSweep ? QUAL_GOD : TBL_TEXT_DIM
+    table.cell(panel, 0, 10 + rowOffset, "Liq Sweep", text_color=TBL_TEXT_DIM, text_size=tSizeSmall, bgcolor=TBL_CELL_BG)
+    table.cell(panel, 1, 10 + rowOffset, sweepStatus, text_color=sweepCol, text_size=tSize, bgcolor=TBL_CELL_BG)
+    table.cell(panel, 2, 10 + rowOffset, recentBullSweep or recentBearSweep ? "🎯" : intrabarInternalSweep ? "⚡" : "", text_color=sweepCol, text_size=tSize, bgcolor=TBL_CELL_BG)
+    
+    // ═══ SIGNAL SECTION ═══
+    table.cell(panel, 0, 11 + rowOffset, "══ SIGNAL ══", text_color=TBL_TEXT_DIM, text_size=tSizeSmall, bgcolor=TBL_HEADER_BG)
+    table.merge_cells(panel, 0, 11 + rowOffset, 2, 11 + rowOffset)
+    
+    color sCol = inSession ? QUAL_MEDIUM : TBL_TEXT_DIM
+    table.cell(panel, 0, 12 + rowOffset, "Session", text_color=TBL_TEXT_DIM, text_size=tSizeSmall, bgcolor=TBL_CELL_BG)
+    table.cell(panel, 1, 12 + rowOffset, currentSession, text_color=sCol, text_size=tSize, bgcolor=TBL_CELL_BG)
+    table.cell(panel, 2, 12 + rowOffset, inSession ? "🟢" : "🔴", text_color=sCol, text_size=tSize, bgcolor=TBL_CELL_BG)
+    
+    // SCORE with quality-based highlighting
+    color scoreCol = activeScore >= minScoreGodMode ? QUAL_GOD : activeScore >= minScoreExcellent ? QUAL_EXCELLENT : activeScore >= minScoreMedium ? QUAL_MEDIUM : QUAL_WEAK
+    color scoreBg = activeScore >= minScoreGodMode ? QUAL_BG_GOD : activeScore >= minScoreExcellent ? QUAL_BG_EXCELLENT : activeScore >= minScoreMedium ? QUAL_BG_MEDIUM : QUAL_BG_WEAK
+    table.cell(panel, 0, 13 + rowOffset, "SCORE", text_color=TBL_TEXT_DIM, text_size=tSizeSmall, bgcolor=scoreBg)
+    table.cell(panel, 1, 13 + rowOffset, str.tostring(activeScore, "#.#") + "/10", text_color=scoreCol, text_size=tSize, bgcolor=scoreBg)
+    table.cell(panel, 2, 13 + rowOffset, activeScoreClass, text_color=scoreCol, text_size=tSizeSmall, bgcolor=scoreBg)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ██████████████████████████████  ALERTS  ══════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+
+alertcondition(godModeLong, title="⚡ GOD MODE LONG", message="⚡ GOD MODE LONG {{ticker}} @ {{close}} | MAXIMUM CONFLUENCE!")
+alertcondition(godModeShort, title="⚡ GOD MODE SHORT", message="⚡ GOD MODE SHORT {{ticker}} @ {{close}} | MAXIMUM CONFLUENCE!")
+
+alertcondition(sLong, title="🎯 S-TIER LONG", message="🎯🥇 S-TIER LONG {{ticker}} @ {{close}} | HOLD | Score: HIGH")
+alertcondition(aLong, title="🎯 A-TIER LONG", message="🎯🥈 A-TIER LONG {{ticker}} @ {{close}} | SWING")
+alertcondition(bLong, title="🎯 B-TIER LONG", message="🎯🥉 B-TIER LONG {{ticker}} @ {{close}} | SCALP")
+
+alertcondition(sShort, title="🎯 S-TIER SHORT", message="🎯🥇 S-TIER SHORT {{ticker}} @ {{close}} | HOLD | Score: HIGH")
+alertcondition(aShort, title="🎯 A-TIER SHORT", message="🎯🥈 A-TIER SHORT {{ticker}} @ {{close}} | SWING")
+alertcondition(bShort, title="🎯 B-TIER SHORT", message="🎯🥉 B-TIER SHORT {{ticker}} @ {{close}} | SCALP")
+
+alertcondition(dfzBuyEntry, title="🎯 ZONE BUY", message="🟢 ZONE BUY {{ticker}} @ {{close}} | Quality Zone Entry")
+alertcondition(dfzSellEntry, title="🎯 ZONE SELL", message="🔴 ZONE SELL {{ticker}} @ {{close}} | Quality Zone Entry")
+
+alertcondition(showBullSweep, title="💎 QUALITY BULL SWEEP", message="💎 QUALITY BULLISH SWEEP {{ticker}} @ {{close}}")
+alertcondition(showBearSweep, title="💎 QUALITY BEAR SWEEP", message="💎 QUALITY BEARISH SWEEP {{ticker}} @ {{close}}")
+
+alertcondition(showBullAbsorption, title="🎯 QUALITY BULL ABSORPTION", message="🎯 QUALITY BULL ABSORPTION {{ticker}} @ {{close}}")
+alertcondition(showBearAbsorption, title="🎯 QUALITY BEAR ABSORPTION", message="🎯 QUALITY BEAR ABSORPTION {{ticker}} @ {{close}}")
+
+alertcondition(londonStart, title="LONDON OPEN", message="London Session Open")
+alertcondition(nyStart, title="NY OPEN", message="NY Session Open")
+alertcondition(powerHourStart, title="POWER HOUR", message="Power Hour Open")
+
+alertcondition(longSignal and longConfluence >= minScoreExcellent, title="⭐ EXCELLENT LONG", message="⭐ EXCELLENT LONG {{ticker}} @ {{close}} | Top-tier setup!")
+alertcondition(shortSignal and shortConfluence >= minScoreExcellent, title="⭐ EXCELLENT SHORT", message="⭐ EXCELLENT SHORT {{ticker}} @ {{close}} | Top-tier setup!")
+
+// Config warning
+alertcondition(intrabarConfigError, title="⚠️ INTRABAR CONFIG ERROR", message="⚠️ INTRABAR TF INVALID on {{ticker}} | Select a timeframe LOWER than your chart TF!")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// █████████████████████████  END OF INDICATOR  █████████████████████════════════
+// ══════════════════════════════════════════════════════════════════════════════
