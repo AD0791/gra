@@ -1,0 +1,557 @@
+//@version=6
+indicator("SNIPER ORB V3", shorttitle="SNIPER ORB V3", overlay=true, max_lines_count=500, max_boxes_count=500, max_labels_count=500)
+
+//═══════════════════════════════════════════════════════════════════════════════════════
+// INPUTS
+//═══════════════════════════════════════════════════════════════════════════════════════
+
+// Session Selection
+sessionType = input.string("New York", "Active Session", options=["London", "New York"], group="Session Settings")
+
+// ORB Display Toggles
+show5minORB = input.bool(true, "Show 5min ORB", group="ORB Display", inline="orb_tog")
+show15minORB = input.bool(true, "Show 15min ORB", group="ORB Display", inline="orb_tog")
+show30minORB = input.bool(true, "Show 30min ORB", group="ORB Display", inline="orb_tog")
+
+// Target Configuration
+numTargets = input.int(3, "Number of Targets", minval=1, maxval=10, group="Target Settings")
+targetPct = input.float(50.0, "Target % of 30min Range", minval=10, maxval=200, group="Target Settings") * 0.01
+
+// ORB Line Colors (UNIQUE FOR EACH PERIOD)
+color5minColor = input.color(color.new(#2196F3, 0), "5min ORB", inline="orb5", group="ORB Colors")
+line5minWidth = input.int(3, "", minval=1, maxval=5, inline="orb5", group="ORB Colors")
+
+color15minColor = input.color(color.new(#00BCD4, 0), "15min ORB", inline="orb15", group="ORB Colors")
+line15minWidth = input.int(2, "", minval=1, maxval=5, inline="orb15", group="ORB Colors")
+
+color30minColor = input.color(color.new(#9C27B0, 0), "30min ORB", inline="orb30", group="ORB Colors")
+line30minWidth = input.int(2, "", minval=1, maxval=5, inline="orb30", group="ORB Colors")
+
+// Target Line Colors (UNIQUE)
+colorTargetUp = input.color(color.new(#4CAF50, 0), "Upside Targets", inline="tgt", group="Target Colors")
+colorTargetDown = input.color(color.new(#F44336, 0), "Downside Targets", inline="tgt", group="Target Colors")
+targetLineWidth = input.int(1, "Width", minval=1, maxval=3, inline="tgt", group="Target Colors")
+
+// VWAP Settings
+showVWAP = input.bool(true, "Show Anchored VWAP", group="VWAP Settings")
+vwapColor = input.color(color.new(#FFC107, 0), "VWAP Color", group="VWAP Settings")
+vwapWidth = input.int(2, "VWAP Width", minval=1, maxval=5, group="VWAP Settings")
+
+// Text Size
+txtSize = input.string("Small", "Label Size", options=["Tiny","Small","Normal","Large"], group="Display Settings")
+txtSizeFormat = txtSize == "Tiny" ? size.tiny : txtSize == "Small" ? size.small : txtSize == "Normal" ? size.normal : size.large
+
+// Label Overlap Tolerance (in ticks)
+labelTolerance = input.float(2.0, "Label Overlap Tolerance (ticks)", minval=0.5, maxval=10, group="Display Settings", tooltip="Labels within this tick range will be combined")
+
+//═══════════════════════════════════════════════════════════════════════════════════════
+// SESSION DETECTION
+//═══════════════════════════════════════════════════════════════════════════════════════
+
+string tz = "America/New_York"
+
+// London: 3:00 AM - 9:30 AM ET
+string londonSpec = "0300-0930:23456"
+bool inLondon = not na(time(timeframe.period, londonSpec, tz))
+bool londonStart = inLondon and not inLondon[1]
+bool londonEnd = inLondon[1] and not inLondon
+
+// New York: 9:30 AM - 5:00 PM ET (1700 = 5:00 PM)
+string nySpec = "0930-1700:23456"
+bool inNY = not na(time(timeframe.period, nySpec, tz))
+bool nyStart = inNY and not inNY[1]
+bool nyEnd = inNY[1] and not inNY
+
+// Active session based on user selection
+bool isActiveSession = sessionType == "London" ? inLondon : inNY
+bool isSessionStart = sessionType == "London" ? londonStart : nyStart
+bool isSessionEnd = sessionType == "London" ? londonEnd : nyEnd
+
+//═══════════════════════════════════════════════════════════════════════════════════════
+// ORB STATE VARIABLES
+//═══════════════════════════════════════════════════════════════════════════════════════
+
+// 5-minute ORB
+var float orb5High = na
+var float orb5Low = na
+var bool orb5Complete = false
+var int orb5StartBar = na
+
+// 15-minute ORB
+var float orb15High = na
+var float orb15Low = na
+var bool orb15Complete = false
+var int orb15StartBar = na
+
+// 30-minute ORB
+var float orb30High = na
+var float orb30Low = na
+var bool orb30Complete = false
+var int orb30StartBar = na
+
+// Session tracking
+var int sessionStartBar = na
+
+// Line objects for ORBs
+var line line5High = na
+var line line5Low = na
+var line line15High = na
+var line line15Low = na
+var line line30High = na
+var line line30Low = na
+
+// SMART LABEL SYSTEM - Combined labels for overlapping levels
+var label labelHighCombined = na
+var label labelLowCombined = na
+
+// Target arrays
+var array<line> upTargetLines = array.new<line>()
+var array<line> downTargetLines = array.new<line>()
+var array<label> upTargetLabels = array.new<label>()
+var array<label> downTargetLabels = array.new<label>()
+
+//═══════════════════════════════════════════════════════════════════════════════════════
+// ANCHORED VWAP CALCULATION (Timestamp-Based Anchoring)
+//═══════════════════════════════════════════════════════════════════════════════════════
+
+var float vwapSum = 0.0
+var float volumeSum = 0.0
+
+// Precise session start detection using timestamp
+int currentHour = hour(time, tz)
+int currentMinute = minute(time, tz)
+
+// Check for exact session start candle
+bool isNYStartCandle = sessionType == "New York" and currentHour == 9 and currentMinute == 30 and not (hour(time[1], tz) == 9 and minute(time[1], tz) == 30)
+bool isLondonStartCandle = sessionType == "London" and currentHour == 3 and currentMinute == 0 and not (hour(time[1], tz) == 3 and minute(time[1], tz) == 0)
+
+bool isVWAPAnchorCandle = isNYStartCandle or isLondonStartCandle
+
+// Reset VWAP at exact session start candle
+if isVWAPAnchorCandle
+    vwapSum := 0.0
+    volumeSum := 0.0
+
+// Accumulate during session
+if isActiveSession
+    float typicalPrice = hlc3
+    vwapSum += typicalPrice * volume
+    volumeSum += volume
+
+float vwap = volumeSum > 0 ? vwapSum / volumeSum : na
+
+//═══════════════════════════════════════════════════════════════════════════════════════
+// SMART LABEL STACKING FUNCTIONS
+//═══════════════════════════════════════════════════════════════════════════════════════
+
+// Tolerance in price units
+tolerancePrice = labelTolerance * syminfo.mintick
+
+// Build combined HIGH label text
+buildHighLabel() =>
+    string labelText = ""
+    color labelColor = color.white
+    float labelPrice = na
+    
+    // Get all active HIGH prices that are within tolerance of each other
+    float h5 = show5minORB and not na(orb5High) ? orb5High : na
+    float h15 = show15minORB and not na(orb15High) ? orb15High : na
+    float h30 = show30minORB and not na(orb30High) ? orb30High : na
+    
+    // Find the maximum high for label positioning
+    float maxHigh = na
+    if not na(h5)
+        maxHigh := h5
+    if not na(h15)
+        maxHigh := na(maxHigh) ? h15 : math.max(maxHigh, h15)
+    if not na(h30)
+        maxHigh := na(maxHigh) ? h30 : math.max(maxHigh, h30)
+    
+    labelPrice := maxHigh
+    
+    // Build label text - check which highs are within tolerance of maxHigh
+    if not na(maxHigh)
+        if not na(h5) and math.abs(h5 - maxHigh) <= tolerancePrice
+            labelText := "5m H"
+            labelColor := color5minColor
+        
+        if not na(h15) and math.abs(h15 - maxHigh) <= tolerancePrice
+            labelText := str.length(labelText) > 0 ? labelText + ", 15m H" : "15m H"
+            if str.length(labelText) == 5  // First entry
+                labelColor := color15minColor
+        
+        if not na(h30) and math.abs(h30 - maxHigh) <= tolerancePrice
+            labelText := str.length(labelText) > 0 ? labelText + ", 30m H" : "30m H"
+            if str.length(labelText) == 5  // First entry
+                labelColor := color30minColor
+    
+    [labelText, labelColor, labelPrice]
+
+// Build combined LOW label text
+buildLowLabel() =>
+    string labelText = ""
+    color labelColor = color.white
+    float labelPrice = na
+    
+    // Get all active LOW prices
+    float l5 = show5minORB and not na(orb5Low) ? orb5Low : na
+    float l15 = show15minORB and not na(orb15Low) ? orb15Low : na
+    float l30 = show30minORB and not na(orb30Low) ? orb30Low : na
+    
+    // Find the minimum low for label positioning
+    float minLow = na
+    if not na(l5)
+        minLow := l5
+    if not na(l15)
+        minLow := na(minLow) ? l15 : math.min(minLow, l15)
+    if not na(l30)
+        minLow := na(minLow) ? l30 : math.min(minLow, l30)
+    
+    labelPrice := minLow
+    
+    // Build label text - check which lows are within tolerance of minLow
+    if not na(minLow)
+        if not na(l5) and math.abs(l5 - minLow) <= tolerancePrice
+            labelText := "5m L"
+            labelColor := color5minColor
+        
+        if not na(l15) and math.abs(l15 - minLow) <= tolerancePrice
+            labelText := str.length(labelText) > 0 ? labelText + ", 15m L" : "15m L"
+            if str.length(labelText) == 4  // First entry
+                labelColor := color15minColor
+        
+        if not na(l30) and math.abs(l30 - minLow) <= tolerancePrice
+            labelText := str.length(labelText) > 0 ? labelText + ", 30m L" : "30m L"
+            if str.length(labelText) == 5  // First entry
+                labelColor := color30minColor
+    
+    [labelText, labelColor, labelPrice]
+
+//═══════════════════════════════════════════════════════════════════════════════════════
+// ORB FORMATION LOGIC (TIMEFRAME-AWARE)
+//═══════════════════════════════════════════════════════════════════════════════════════
+
+// Session start - initialize all ORBs
+if isSessionStart
+    sessionStartBar := bar_index
+    
+    // Reset 5min ORB
+    orb5High := high
+    orb5Low := low
+    orb5Complete := false
+    orb5StartBar := bar_index
+    
+    // Reset 15min ORB
+    orb15High := high
+    orb15Low := low
+    orb15Complete := false
+    orb15StartBar := bar_index
+    
+    // Reset 30min ORB
+    orb30High := high
+    orb30Low := low
+    orb30Complete := false
+    orb30StartBar := bar_index
+    
+    // Delete previous session lines
+    if not na(line5High)
+        line.delete(line5High)
+        line.delete(line5Low)
+        line.delete(line15High)
+        line.delete(line15Low)
+        line.delete(line30High)
+        line.delete(line30Low)
+    
+    // Delete combined labels
+    if not na(labelHighCombined)
+        label.delete(labelHighCombined)
+        labelHighCombined := na
+    if not na(labelLowCombined)
+        label.delete(labelLowCombined)
+        labelLowCombined := na
+    
+    // Reset line references
+    line5High := na
+    line5Low := na
+    line15High := na
+    line15Low := na
+    line30High := na
+    line30Low := na
+    
+    // Delete target lines and labels
+    for tline in upTargetLines
+        line.delete(tline)
+    for tline in downTargetLines
+        line.delete(tline)
+    for tlabel in upTargetLabels
+        label.delete(tlabel)
+    for tlabel in downTargetLabels
+        label.delete(tlabel)
+    
+    array.clear(upTargetLines)
+    array.clear(downTargetLines)
+    array.clear(upTargetLabels)
+    array.clear(downTargetLabels)
+
+// CRITICAL: Timeframe-aware bar calculation
+float tfMinutes = timeframe.in_seconds() / 60
+
+// Update ORBs during formation
+if isActiveSession
+    // 5-minute ORB formation
+    if not orb5Complete
+        if high > orb5High
+            orb5High := high
+        if low < orb5Low
+            orb5Low := low
+        
+        // Check if 5 minutes have passed (timeframe-aware)
+        int bars5min = int(5 / tfMinutes)
+        if bar_index >= orb5StartBar + bars5min
+            orb5Complete := true
+    
+    // 15-minute ORB formation
+    if not orb15Complete
+        if high > orb15High
+            orb15High := high
+        if low < orb15Low
+            orb15Low := low
+        
+        int bars15min = int(15 / tfMinutes)
+        if bar_index >= orb15StartBar + bars15min
+            orb15Complete := true
+    
+    // 30-minute ORB formation
+    if not orb30Complete
+        if high > orb30High
+            orb30High := high
+        if low < orb30Low
+            orb30Low := low
+        
+        int bars30min = int(30 / tfMinutes)
+        if bar_index >= orb30StartBar + bars30min
+            orb30Complete := true
+
+//═══════════════════════════════════════════════════════════════════════════════════════
+// DRAW ORB LINES (ACTIVE SESSION ONLY)
+//═══════════════════════════════════════════════════════════════════════════════════════
+
+if isActiveSession and not na(orb5High)
+    // ═══ 5-MIN ORB LINES ═══
+    if show5minORB
+        if na(line5High)
+            line5High := line.new(orb5StartBar, orb5High, bar_index, orb5High, color=color5minColor, width=line5minWidth)
+            line5Low := line.new(orb5StartBar, orb5Low, bar_index, orb5Low, color=color5minColor, width=line5minWidth)
+        else
+            line.set_y1(line5High, orb5High)
+            line.set_y2(line5High, orb5High)
+            line.set_x2(line5High, bar_index)
+            
+            line.set_y1(line5Low, orb5Low)
+            line.set_y2(line5Low, orb5Low)
+            line.set_x2(line5Low, bar_index)
+    else
+        if not na(line5High)
+            line.delete(line5High)
+            line.delete(line5Low)
+            line5High := na
+            line5Low := na
+    
+    // ═══ 15-MIN ORB LINES ═══
+    if show15minORB
+        if na(line15High)
+            line15High := line.new(orb15StartBar, orb15High, bar_index, orb15High, color=color15minColor, width=line15minWidth)
+            line15Low := line.new(orb15StartBar, orb15Low, bar_index, orb15Low, color=color15minColor, width=line15minWidth)
+        else
+            line.set_y1(line15High, orb15High)
+            line.set_y2(line15High, orb15High)
+            line.set_x2(line15High, bar_index)
+            
+            line.set_y1(line15Low, orb15Low)
+            line.set_y2(line15Low, orb15Low)
+            line.set_x2(line15Low, bar_index)
+    else
+        if not na(line15High)
+            line.delete(line15High)
+            line.delete(line15Low)
+            line15High := na
+            line15Low := na
+    
+    // ═══ 30-MIN ORB LINES ═══
+    if show30minORB
+        if na(line30High)
+            line30High := line.new(orb30StartBar, orb30High, bar_index, orb30High, color=color30minColor, width=line30minWidth)
+            line30Low := line.new(orb30StartBar, orb30Low, bar_index, orb30Low, color=color30minColor, width=line30minWidth)
+        else
+            line.set_y1(line30High, orb30High)
+            line.set_y2(line30High, orb30High)
+            line.set_x2(line30High, bar_index)
+            
+            line.set_y1(line30Low, orb30Low)
+            line.set_y2(line30Low, orb30Low)
+            line.set_x2(line30Low, bar_index)
+    else
+        if not na(line30High)
+            line.delete(line30High)
+            line.delete(line30Low)
+            line30High := na
+            line30Low := na
+    
+    // ═══ SMART COMBINED LABELS ═══
+    // Delete old combined labels
+    if not na(labelHighCombined)
+        label.delete(labelHighCombined)
+        labelHighCombined := na
+    if not na(labelLowCombined)
+        label.delete(labelLowCombined)
+        labelLowCombined := na
+    
+    // Build and create combined HIGH label
+    [highText, highColor, highPrice] = buildHighLabel()
+    if str.length(highText) > 0 and not na(highPrice)
+        labelHighCombined := label.new(bar_index, highPrice, highText, 
+                                       style=label.style_label_left, 
+                                       color=color.new(color.black, 100), 
+                                       textcolor=highColor, 
+                                       size=txtSizeFormat)
+    
+    // Build and create combined LOW label
+    [lowText, lowColor, lowPrice] = buildLowLabel()
+    if str.length(lowText) > 0 and not na(lowPrice)
+        labelLowCombined := label.new(bar_index, lowPrice, lowText, 
+                                      style=label.style_label_left, 
+                                      color=color.new(color.black, 100), 
+                                      textcolor=lowColor, 
+                                      size=txtSizeFormat)
+
+//═══════════════════════════════════════════════════════════════════════════════════════
+// TARGET GENERATION (FROM 30MIN ORB ONLY)
+//═══════════════════════════════════════════════════════════════════════════════════════
+
+if orb30Complete and array.size(upTargetLines) == 0
+    float orb30Range = orb30High - orb30Low
+    
+    // Generate upside targets
+    for i = 1 to numTargets
+        float targetPrice = orb30High + (orb30Range * targetPct * i)
+        line tline = line.new(bar_index, targetPrice, bar_index, targetPrice, 
+                              color=colorTargetUp, width=targetLineWidth, style=line.style_dashed)
+        label tlabel = label.new(bar_index, targetPrice, str.tostring(i) + "x", 
+                                 style=label.style_label_left, color=color.new(color.black, 100), 
+                                 textcolor=colorTargetUp, size=txtSizeFormat)
+        array.push(upTargetLines, tline)
+        array.push(upTargetLabels, tlabel)
+    
+    // Generate downside targets
+    for i = 1 to numTargets
+        float targetPrice = orb30Low - (orb30Range * targetPct * i)
+        line tline = line.new(bar_index, targetPrice, bar_index, targetPrice, 
+                              color=colorTargetDown, width=targetLineWidth, style=line.style_dashed)
+        label tlabel = label.new(bar_index, targetPrice, str.tostring(i) + "x", 
+                                 style=label.style_label_left, color=color.new(color.black, 100), 
+                                 textcolor=colorTargetDown, size=txtSizeFormat)
+        array.push(downTargetLines, tline)
+        array.push(downTargetLabels, tlabel)
+
+// Extend target lines during active session
+if isActiveSession and orb30Complete
+    for tline in upTargetLines
+        line.set_x2(tline, bar_index)
+    for tlabel in upTargetLabels
+        label.set_x(tlabel, bar_index)
+    
+    for tline in downTargetLines
+        line.set_x2(tline, bar_index)
+    for tlabel in downTargetLabels
+        label.set_x(tlabel, bar_index)
+
+//═══════════════════════════════════════════════════════════════════════════════════════
+// SESSION END - DELETE ALL OBJECTS
+//═══════════════════════════════════════════════════════════════════════════════════════
+
+if isSessionEnd
+    // Delete ORB lines
+    if not na(line5High)
+        line.delete(line5High)
+        line.delete(line5Low)
+        line5High := na
+        line5Low := na
+    
+    if not na(line15High)
+        line.delete(line15High)
+        line.delete(line15Low)
+        line15High := na
+        line15Low := na
+    
+    if not na(line30High)
+        line.delete(line30High)
+        line.delete(line30Low)
+        line30High := na
+        line30Low := na
+    
+    // Delete combined labels
+    if not na(labelHighCombined)
+        label.delete(labelHighCombined)
+        labelHighCombined := na
+    if not na(labelLowCombined)
+        label.delete(labelLowCombined)
+        labelLowCombined := na
+    
+    // Delete target lines
+    for tline in upTargetLines
+        line.delete(tline)
+    for tline in downTargetLines
+        line.delete(tline)
+    
+    // Delete target labels
+    for tlabel in upTargetLabels
+        label.delete(tlabel)
+    for tlabel in downTargetLabels
+        label.delete(tlabel)
+    
+    // Clear arrays
+    array.clear(upTargetLines)
+    array.clear(downTargetLines)
+    array.clear(upTargetLabels)
+    array.clear(downTargetLabels)
+
+//═══════════════════════════════════════════════════════════════════════════════════════
+// PLOT ANCHORED VWAP (ONLY DURING ACTIVE SESSION)
+//═══════════════════════════════════════════════════════════════════════════════════════
+
+plot(showVWAP and isActiveSession ? vwap : na, "Anchored VWAP", color=vwapColor, linewidth=vwapWidth, style=plot.style_linebr)
+
+//═══════════════════════════════════════════════════════════════════════════════════════
+// INFO TABLE
+//═══════════════════════════════════════════════════════════════════════════════════════
+
+var table infoTable = table.new(position.top_right, 2, 7, border_width=1)
+
+if isActiveSession and orb30Complete
+    table.cell(infoTable, 0, 0, "SNIPER ORB V3", text_color=color.white, bgcolor=color.new(color.gray, 30))
+    table.cell(infoTable, 1, 0, sessionType, text_color=color.white, bgcolor=color.new(color.gray, 30))
+    
+    table.cell(infoTable, 0, 1, "5m Range", text_color=color5minColor)
+    table.cell(infoTable, 1, 1, str.tostring(orb5High - orb5Low, format.mintick), text_color=color.white)
+    
+    table.cell(infoTable, 0, 2, "15m Range", text_color=color15minColor)
+    table.cell(infoTable, 1, 2, str.tostring(orb15High - orb15Low, format.mintick), text_color=color.white)
+    
+    table.cell(infoTable, 0, 3, "30m Range", text_color=color30minColor)
+    table.cell(infoTable, 1, 3, str.tostring(orb30High - orb30Low, format.mintick), text_color=color.white)
+    
+    table.cell(infoTable, 0, 4, "VWAP", text_color=vwapColor)
+    table.cell(infoTable, 1, 4, str.tostring(vwap, format.mintick), text_color=color.white)
+    
+    table.cell(infoTable, 0, 5, "Target Mult", text_color=color.gray)
+    table.cell(infoTable, 1, 5, str.tostring(targetPct * 100) + "%", text_color=color.white)
+    
+    table.cell(infoTable, 0, 6, "Status", text_color=color.gray)
+    string status = orb30Complete ? "✓ Complete" : "⏳ Forming"
+    table.cell(infoTable, 1, 6, status, text_color=orb30Complete ? color.green : color.yellow)
+else
+    table.clear(infoTable, 0, 0, 1, 6)
+
+//═══════════════════════════════════════════════════════════════════════════════════════
+// END OF SNIPER ORB V3
+//═══════════════════════════════════════════════════════════════════════════════════════
