@@ -1,0 +1,354 @@
+// This Pine Script™ code is subject to the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © AlexandroTrader - NQ SNIPER ULTIMATE v10.3 - CLEAN & MINIMAL
+
+//@version=6
+indicator("NQ SNIPER 💎 v10.3", overlay=true, max_labels_count=500, max_bars_back=5000)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🚨 CHALLENGE MODE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+CHALLENGE_MODE = input.bool(true, "🚨 CHALLENGE MODE", group="⚙️ Main")
+CURRENT_BALANCE = input.float(48299, "💰 Balance", group="⚙️ Main")
+BLOWUP_LEVEL = input.float(48000, "🛑 Blow-up", group="⚙️ Main")
+TARGET_LEVEL = input.float(53000, "🎯 Target", group="⚙️ Main")
+
+bufferRemaining = CURRENT_BALANCE - BLOWUP_LEVEL
+profitNeeded = TARGET_LEVEL - CURRENT_BALANCE
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 📊 CHART DETECTION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+chartPeriod = timeframe.period
+chartIsRange = str.endswith(chartPeriod, "R")
+chartIsMinutes = not chartIsRange and not str.endswith(chartPeriod, "T") and not str.endswith(chartPeriod, "S")
+
+getChartValue() =>
+    if chartIsRange
+        str.tonumber(str.replace(chartPeriod, "R", ""))
+    else
+        timeframe.in_seconds() / 60.0
+
+chartValue = getChartValue()
+chartLabel = chartIsRange ? chartPeriod : str.tostring(math.round(chartValue)) + "M"
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 📊 INTRABAR SETTINGS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+RANGE_INTRABAR = input.string("100", "🔷 Range Intrabar", 
+     options=["1", "10", "100"], group="📊 Intrabar")
+MINUTE_INTRABAR = input.string("1", "⏱️ Minute Intrabar",
+     options=["1", "2", "3"], group="📊 Intrabar")
+
+getIntrabarTF() =>
+    if chartIsRange
+        RANGE_INTRABAR + "R"
+    else
+        MINUTE_INTRABAR
+
+intrabarTF = getIntrabarTF()
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🔥 GOD MODE SETTINGS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+GOD_SCORE = input.float(9.5, "🔥 GOD Score", minval=8.0, maxval=10.0, step=0.1, group="🔥 GOD MODE")
+GOD_FAT_BODY = input.float(70.0, "💪 Fat Body %", minval=50, maxval=90, step=5, group="🔥 GOD MODE")
+GOD_MAX_WICK = input.float(25.0, "🚫 Max Wick %", minval=10, maxval=40, step=5, group="🔥 GOD MODE")
+GOD_DELTA = input.float(70.0, "⚡ Delta %", minval=50, maxval=90, step=5, group="🔥 GOD MODE")
+GOD_CONSISTENCY = input.float(70.0, "📊 Consistency %", minval=50, maxval=90, step=5, group="🔥 GOD MODE")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🌍 SESSIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+ENABLE_LONDON = input.bool(true, "🇬🇧 London (3-5 AM)", group="🌍 Sessions")
+ENABLE_NY = input.bool(true, "🇺🇸 NY (9:30-11:30 AM)", group="🌍 Sessions")
+ENABLE_ALL = input.bool(false, "📍 All Sessions", group="🌍 Sessions")
+
+isLondon() => hour(time, "America/New_York") >= 3 and hour(time, "America/New_York") < 5
+isNY() => 
+    h = hour(time, "America/New_York")
+    m = minute(time, "America/New_York")
+    (h == 9 and m >= 30) or h == 10 or (h == 11 and m < 30)
+
+isActiveSession() => ENABLE_ALL or (ENABLE_LONDON and isLondon()) or (ENABLE_NY and isNY())
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🎨 VISUAL
+// ═══════════════════════════════════════════════════════════════════════════════
+
+SHOW_GOD = input.bool(true, "GOD MODE", group="🎨 Show")
+SHOW_EXCELLENT = input.bool(false, "EXCELLENT", group="🎨 Show")
+SHOW_TABLE = input.bool(true, "Status Table", group="🎨 Show")
+
+STOP_PTS = input.float(10.0, "Stop (pts)", group="💰 Risk")
+TARGET_PTS = input.float(30.0, "Target (pts)", group="💰 Risk")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 📊 INTRABAR DATA
+// ═══════════════════════════════════════════════════════════════════════════════
+
+type IBData
+    int total = 0
+    int bulls = 0
+    int bears = 0
+    float delta = 0.0
+    float vol = 0.0
+    bool absorption = false
+    bool sweep = false
+    bool valid = false
+
+analyzeIB() =>
+    data = IBData.new()
+    
+    // Try to get intrabar data
+    [ibO, ibH, ibL, ibC, ibV] = request.security_lower_tf(syminfo.tickerid, intrabarTF, 
+         [open, high, low, close, volume], ignore_invalid_timeframe = true)
+    
+    sz = array.size(ibC)
+    
+    if sz > 0
+        data.valid := true
+        data.total := sz
+        
+        for i = 0 to sz - 1
+            o = array.get(ibO, i)
+            h = array.get(ibH, i)
+            l = array.get(ibL, i)
+            c = array.get(ibC, i)
+            v = array.get(ibV, i)
+            
+            bull = c > o
+            data.vol += v
+            
+            if bull
+                data.bulls += 1
+                data.delta += v
+            else
+                data.bears += 1
+                data.delta -= v
+        
+        // Absorption check
+        if sz > 0
+            avgV = data.vol / sz
+            for i = 0 to sz - 1
+                h = array.get(ibH, i)
+                l = array.get(ibL, i)
+                o = array.get(ibO, i)
+                c = array.get(ibC, i)
+                v = array.get(ibV, i)
+                rng = h - l
+                bod = math.abs(c - o)
+                if rng > 0 and (bod / rng) < 0.3 and v > avgV * 1.5
+                    data.absorption := true
+                    break
+        
+        // Sweep check
+        if sz > 1
+            for i = 1 to sz - 1
+                cH = array.get(ibH, i)
+                cL = array.get(ibL, i)
+                cC = array.get(ibC, i)
+                pH = array.get(ibH, i-1)
+                pL = array.get(ibL, i-1)
+                if (cH > pH and cC < pH) or (cL < pL and cC > pL)
+                    data.sweep := true
+                    break
+    
+    data
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🎯 CANDLE METRICS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+getMetrics(float o, float h, float l, float c) =>
+    rng = h - l
+    bod = math.abs(c - o)
+    bull = c > o
+    badWick = bull ? (o - l) : (h - o)
+    fatPct = rng > 0 ? (bod / rng) * 100 : 0
+    wickPct = rng > 0 ? (badWick / rng) * 100 : 0
+    [fatPct, wickPct, bull]
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🎯 SCORING
+// ═══════════════════════════════════════════════════════════════════════════════
+
+calcScore(IBData ib, bool bull, float fatPct, float wickPct) =>
+    score = 0.0
+    
+    if not ib.valid
+        // No intrabar - basic candle scoring only (max 5)
+        score += fatPct >= 75 ? 2.0 : fatPct >= 65 ? 1.5 : 1.0
+        score += wickPct <= 15 ? 2.0 : wickPct <= 25 ? 1.5 : 1.0
+        if isNY()
+            score += 1.0
+        else if isLondon()
+            score += 0.8
+    else
+        // Full scoring with intrabar (max 10)
+        
+        // 1. Delta (2 pts)
+        deltaPct = ib.vol > 0 ? math.abs(ib.delta / ib.vol) * 100 : 0
+        deltaOK = (bull and ib.delta > 0) or (not bull and ib.delta < 0)
+        if deltaOK
+            score += deltaPct >= 75 ? 2.0 : deltaPct >= 65 ? 1.7 : deltaPct >= 55 ? 1.3 : 0.8
+        
+        // 2. Consistency (2 pts)
+        if ib.total > 0
+            cons = bull ? float(ib.bulls) / ib.total : float(ib.bears) / ib.total
+            score += cons >= 0.80 ? 2.0 : cons >= 0.70 ? 1.6 : cons >= 0.60 ? 1.2 : 0.6
+        
+        // 3. Absorption (1.5 pts)
+        if ib.absorption
+            score += 1.5
+        
+        // 4. Sweep (1.5 pts)
+        if ib.sweep
+            score += 1.5
+        
+        // 5. Candle quality (1.5 pts)
+        if fatPct >= 75 and wickPct <= 20
+            score += 1.5
+        else if fatPct >= 65 and wickPct <= 30
+            score += 1.0
+        else
+            score += 0.5
+        
+        // 6. Session (1 pt)
+        if isNY()
+            score += 1.0
+        else if isLondon()
+            score += 0.8
+    
+    math.round(score * 10) / 10
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🚦 GOD MODE CHECK
+// ═══════════════════════════════════════════════════════════════════════════════
+
+isGodMode(float score, float fatPct, float wickPct, IBData ib, bool bull) =>
+    g1 = score >= GOD_SCORE
+    g2 = fatPct >= GOD_FAT_BODY
+    g3 = wickPct <= GOD_MAX_WICK
+    g4 = isActiveSession()
+    
+    // Delta & consistency gates (if intrabar available)
+    g5 = true
+    g6 = true
+    if ib.valid and ib.vol > 0
+        deltaPct = math.abs(ib.delta / ib.vol) * 100
+        deltaOK = (bull and ib.delta > 0) or (not bull and ib.delta < 0)
+        g5 := deltaOK and deltaPct >= GOD_DELTA
+        
+        if ib.total > 0
+            cons = bull ? float(ib.bulls) / ib.total * 100 : float(ib.bears) / ib.total * 100
+            g6 := cons >= GOD_CONSISTENCY
+    
+    // Challenge mode requires intrabar
+    if CHALLENGE_MODE and not ib.valid
+        false
+    else
+        g1 and g2 and g3 and g4 and g5 and g6
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🎨 MAIN
+// ═══════════════════════════════════════════════════════════════════════════════
+
+[fatPct, wickPct, isBull] = getMetrics(open, high, low, close)
+ib = analyzeIB()
+score = calcScore(ib, isBull, fatPct, wickPct)
+godMode = isGodMode(score, fatPct, wickPct, ib, isBull)
+
+tier = score >= 9.5 ? "S" : score >= 8.5 ? "A" : score >= 7.5 ? "B" : "C"
+
+deltaPct = ib.vol > 0 ? math.abs(ib.delta / ib.vol) * 100 : 0
+consPct = ib.total > 0 ? (isBull ? float(ib.bulls) / ib.total * 100 : float(ib.bears) / ib.total * 100) : 0
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 📍 SIGNALS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+showSig = false
+if CHALLENGE_MODE
+    showSig := godMode and tier == "S" and SHOW_GOD
+else
+    showSig := (godMode and SHOW_GOD) or (tier == "S" and SHOW_EXCELLENT) or (tier == "A" and SHOW_EXCELLENT)
+
+if showSig and barstate.isconfirmed
+    // MINIMAL LABEL - Just letter + tier
+    txt = godMode ? "G" + tier : "E" + tier
+    
+    col = godMode ? color.new(#00FFFF, 0) : color.new(#00FF00, 0)
+    y = isBull ? low : high
+    sty = isBull ? label.style_label_up : label.style_label_down
+    
+    // Entry/Stop/Target for tooltip
+    entry = close
+    stop = isBull ? close - STOP_PTS : close + STOP_PTS
+    tgt = isBull ? close + TARGET_PTS : close - TARGET_PTS
+    
+    tip = "Score: " + str.tostring(score, "#.#") + 
+         " | Fat: " + str.tostring(fatPct, "#") + "%" +
+         " | Wick: " + str.tostring(wickPct, "#") + "%" +
+         "\nDelta: " + str.tostring(deltaPct, "#") + "%" +
+         " | Cons: " + str.tostring(consPct, "#") + "%" +
+         " | Bars: " + str.tostring(ib.total) +
+         (ib.absorption ? " | ABS" : "") +
+         (ib.sweep ? " | SWP" : "") +
+         "\nE:" + str.tostring(entry, "#.##") +
+         " S:" + str.tostring(stop, "#.##") +
+         " T:" + str.tostring(tgt, "#.##")
+    
+    label.new(bar_index, y, txt, xloc.bar_index, yloc.price, col, sty, color.black, size.tiny, text.align_center, tip)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🎯 ALERTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+if showSig and barstate.isconfirmed
+    dir = isBull ? "LONG" : "SHORT"
+    stop = isBull ? close - STOP_PTS : close + STOP_PTS
+    tgt = isBull ? close + TARGET_PTS : close - TARGET_PTS
+    
+    alert("🔥 GOD " + dir + " | " + str.tostring(score, "#.#") + "/10 | E:" + 
+         str.tostring(close, "#.##") + " S:" + str.tostring(stop, "#.##") + 
+         " T:" + str.tostring(tgt, "#.##"), alert.freq_once_per_bar)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 📊 MINIMAL TABLE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var table tbl = table.new(position.top_right, 2, 4, color.new(color.black, 80), color.gray, 1)
+
+if barstate.islast and SHOW_TABLE
+    // Row 0: Mode
+    modeCol = CHALLENGE_MODE ? color.red : color.green
+    table.cell(tbl, 0, 0, CHALLENGE_MODE ? "🚨" : "📊", text_color=modeCol, text_size=size.tiny)
+    table.cell(tbl, 1, 0, "$" + str.tostring(bufferRemaining, "#"), 
+         text_color=bufferRemaining < 300 ? color.red : color.green, text_size=size.tiny)
+    
+    // Row 1: Chart/IB
+    table.cell(tbl, 0, 1, chartLabel, text_color=color.white, text_size=size.tiny)
+    ibCol = ib.valid ? color.green : color.orange
+    ibTxt = ib.valid ? intrabarTF + "✓" : intrabarTF + "✗"
+    table.cell(tbl, 1, 1, ibTxt, text_color=ibCol, text_size=size.tiny)
+    
+    // Row 2: Session
+    sessName = isNY() ? "NY" : isLondon() ? "LDN" : "OFF"
+    sessCol = isActiveSession() ? color.green : color.gray
+    table.cell(tbl, 0, 2, sessName, text_color=sessCol, text_size=size.tiny)
+    table.cell(tbl, 1, 2, ib.valid ? str.tostring(ib.total) + "b" : "-", text_color=color.white, text_size=size.tiny)
+    
+    // Row 3: Target remaining
+    table.cell(tbl, 0, 3, "→", text_color=color.gray, text_size=size.tiny)
+    table.cell(tbl, 1, 3, "$" + str.tostring(profitNeeded, "#"), text_color=color.lime, text_size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 📊 BACKGROUND
+// ═══════════════════════════════════════════════════════════════════════════════
+
+bgcolor(godMode and tier == "S" and ib.valid ? color.new(color.aqua, 94) : na)
