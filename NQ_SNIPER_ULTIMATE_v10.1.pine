@@ -1,0 +1,618 @@
+// This Pine Script™ code is subject to the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © YourTradingName - NQ SNIPER ULTIMATE v10.1 - PURE ORDER FLOW
+
+//@version=6
+indicator("NQ SNIPER ULTIMATE 💎 v10.1", overlay=true, max_labels_count=500, max_bars_back=5000)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🎯 CHALLENGE MODE & MASTER SETTINGS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+CHALLENGE_MODE = input.bool(true, "🚨 ULTRA-SAFE MODE (S-Tier GOD ONLY)", 
+     tooltip="Only shows the absolute best signals for challenge trading", group="🎯 Master Settings")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 📊 INTRABAR ANALYSIS TIMEFRAME SELECTOR
+// ═══════════════════════════════════════════════════════════════════════════════
+// NOTE: Tick timeframes removed - not available in your subscription
+// Range timeframes work the same as Tick (1R ≈ 1T for institutional analysis)
+
+TIMEFRAME_TYPE = input.string("Range", "📊 Timeframe Type", 
+     options=["Range", "Minutes"],
+     tooltip="Range (1R, 5R, 10R) = Best for order flow | Minutes (1, 2, 3) = Time-based",
+     group="📊 Intrabar Analysis")
+
+// RANGE TIMEFRAME OPTIONS (when TIMEFRAME_TYPE = "Range")
+RANGE_TIMEFRAME = input.string("1", "🔷 Range Timeframe", 
+     options=["1", "2", "3", "5", "10", "25", "50", "100", "250", "500", "1000"], 
+     tooltip="1R = Ultra-precision (best) | 5-10R = Standard | 50-100R = Smoother",
+     group="📊 Intrabar Analysis")
+
+// MINUTE TIMEFRAME OPTIONS (when TIMEFRAME_TYPE = "Minutes")
+MINUTE_TIMEFRAME = input.string("1", "⏱️ Minute Timeframe", 
+     options=["1", "2", "3", "5", "10", "15", "30", "60"], 
+     tooltip="Must be LOWER than your chart timeframe!",
+     group="📊 Intrabar Analysis")
+
+SHOW_TIMEFRAME_LABEL = input.bool(true, "Show Chart TF on Labels", group="📊 Intrabar Analysis")
+SHOW_IB_STATUS_TABLE = input.bool(true, "Show Intrabar Status Table", group="📊 Intrabar Analysis")
+
+// Auto-detect NQ/MNQ
+TICKS_PER_POINT = 4
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 📊 CURRENT CHART TIMEFRAME DETECTION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+getCurrentTimeframeMinutes() =>
+    tfSeconds = timeframe.in_seconds()
+    tfSeconds > 0 ? tfSeconds / 60.0 : 0.0
+
+currentTF = getCurrentTimeframeMinutes()
+
+// Detect chart type by parsing timeframe.period string
+chartPeriod = timeframe.period
+chartIsRange = str.endswith(chartPeriod, "R")
+chartIsTick = str.endswith(chartPeriod, "T")
+chartIsSeconds = str.endswith(chartPeriod, "S")
+
+// Extract chart timeframe value for validation
+getChartTFValue() =>
+    if chartIsRange
+        str.tonumber(str.replace(chartPeriod, "R", ""))
+    else if chartIsTick
+        str.tonumber(str.replace(chartPeriod, "T", ""))
+    else if chartIsSeconds
+        str.tonumber(str.replace(chartPeriod, "S", "")) / 60.0
+    else
+        currentTF
+
+chartTFValue = getChartTFValue()
+
+// Adaptive multiplier based on CHART timeframe
+getTimeframeMultiplier() =>
+    if currentTF >= 5
+        0.85  // 5-minute chart
+    else if currentTF >= 3
+        0.90  // 3-minute chart
+    else if currentTF >= 2
+        0.95  // 2-minute chart
+    else if currentTF >= 1
+        1.00  // 1-minute chart
+    else
+        0.80  // Range/Tick charts (stricter)
+
+tfMultiplier = getTimeframeMultiplier()
+
+getChartTimeframeLabel() =>
+    if chartIsRange
+        chartPeriod
+    else if chartIsTick
+        chartPeriod
+    else if chartIsSeconds
+        chartPeriod
+    else if currentTF >= 60
+        str.tostring(math.round(currentTF / 60)) + "H"
+    else if currentTF >= 5
+        str.tostring(math.round(currentTF)) + "M"
+    else if currentTF >= 3
+        "3M"
+    else if currentTF >= 2
+        "2M"
+    else if currentTF >= 1
+        "1M"
+    else
+        chartPeriod
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🔧 BUILD ANALYSIS TIMEFRAME STRING
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Returns the timeframe string for request.security_lower_tf()
+getAnalysisTimeframe() =>
+    switch TIMEFRAME_TYPE
+        "Range" => RANGE_TIMEFRAME + "R"
+        "Minutes" => MINUTE_TIMEFRAME
+        => "1R"  // Default fallback
+
+analysisTF = getAnalysisTimeframe()
+
+// Get the numeric value of the analysis timeframe for validation
+getAnalysisTFValue() =>
+    if TIMEFRAME_TYPE == "Range"
+        str.tonumber(RANGE_TIMEFRAME)
+    else
+        str.tonumber(MINUTE_TIMEFRAME)
+
+analysisTFValue = getAnalysisTFValue()
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ⚠️ TIMEFRAME VALIDATION SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════════
+// request.security_lower_tf() requires the analysis TF to be LOWER than chart TF
+// If invalid, it returns an empty array - we detect this and warn the user
+
+isValidLowerTF() =>
+    // For Range chart with Range analysis: analysis must be lower range
+    if chartIsRange and TIMEFRAME_TYPE == "Range"
+        analysisTFValue < chartTFValue
+    // For Minute chart with Minute analysis: analysis must be lower
+    else if not chartIsRange and not chartIsTick and TIMEFRAME_TYPE == "Minutes"
+        analysisTFValue < currentTF
+    // For Range analysis on Minute chart: always valid (range is lower)
+    else if not chartIsRange and not chartIsTick and TIMEFRAME_TYPE == "Range"
+        true
+    // For Minute analysis on Range chart: depends on chart range size
+    else if chartIsRange and TIMEFRAME_TYPE == "Minutes"
+        true  // Usually valid, we'll detect via empty array
+    else
+        true
+
+theoreticallyValid = isValidLowerTF()
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🔥 GOD MODE GATES (ULTRA-CONSERVATIVE)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+BASE_GOD_SCORE = input.float(9.5, "🔥 Base GOD MODE Score", minval=8.0, maxval=10.0, step=0.1,
+     tooltip="Base threshold for GOD MODE - auto-adjusts by chart timeframe", group="🔥 GOD MODE Gates")
+GOD_MODE_SCORE_THRESHOLD = BASE_GOD_SCORE * tfMultiplier
+
+BASE_FAT_BODY = input.float(75, "💪 Base Fat Body %", minval=60, maxval=90, step=5, group="🔥 GOD MODE Gates")
+GOD_MODE_FAT_BODY = BASE_FAT_BODY * tfMultiplier
+
+BASE_MAX_ADVERSE_WICK = input.float(20, "🚫 Base Max Adverse Wick %", minval=10, maxval=40, step=5, group="🔥 GOD MODE Gates")
+GOD_MODE_MAX_ADVERSE_WICK = BASE_MAX_ADVERSE_WICK / tfMultiplier
+
+BASE_DELTA_DOMINANCE = input.float(75, "⚡ Base Delta Dominance %", minval=60, maxval=90, step=5, group="🔥 GOD MODE Gates")
+GOD_MODE_DELTA_DOMINANCE = BASE_DELTA_DOMINANCE * tfMultiplier
+
+// TIER CLASSIFICATION
+S_TIER_THRESHOLD = input.float(9.5, "🏆 S-TIER Base", minval=9.0, maxval=10.0, step=0.1, group="🏆 Tier Classification") * tfMultiplier
+A_TIER_THRESHOLD = input.float(8.5, "🥇 A-TIER Base", minval=7.0, maxval=9.0, step=0.1, group="🏆 Tier Classification") * tfMultiplier
+B_TIER_THRESHOLD = input.float(7.5, "🥈 B-TIER Base", minval=6.0, maxval=8.0, step=0.1, group="🏆 Tier Classification") * tfMultiplier
+
+// SESSION FILTERS
+ENABLE_LONDON_OPEN = input.bool(true, "🇬🇧 London Open (3-5 AM ET)", group="🌍 Trading Sessions")
+ENABLE_NY_OPEN = input.bool(true, "🇺🇸 NY Open (9:30-11:30 AM ET)", group="🌍 Trading Sessions")
+ENABLE_ASIAN = input.bool(false, "🌏 Asian Session (6 PM - 3 AM ET)", group="🌍 Trading Sessions")
+ENABLE_ALL_SESSIONS = input.bool(false, "📍 Allow All Sessions (Override)", group="🌍 Trading Sessions",
+     tooltip="If enabled, signals can appear during any session")
+
+// VISUAL SETTINGS
+SHOW_GOD_MODE = input.bool(true, "Show GOD MODE Signals", group="🎨 Visual Settings")
+SHOW_EXCELLENT = input.bool(true, "Show EXCELLENT Signals", group="🎨 Visual Settings")
+SHOW_MEDIUM = input.bool(false, "Show MEDIUM Signals", group="🎨 Visual Settings")
+LABEL_SIZE = input.string("tiny", "Label Size", options=["tiny", "small", "normal"], group="🎨 Visual Settings")
+
+// RISK MANAGEMENT DEFAULTS
+DEFAULT_STOP_POINTS = input.float(10.0, "Default Stop (Points)", minval=5.0, maxval=50.0, step=1.0, group="💰 Risk Management")
+DEFAULT_TARGET_POINTS = input.float(30.0, "Default Target (Points)", minval=10.0, maxval=100.0, step=1.0, group="💰 Risk Management")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 📊 LOWER TIMEFRAME DATA STRUCTURES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+type LowerTFData
+    float trueDelta = 0.0
+    float buyVolume = 0.0
+    float sellVolume = 0.0
+    float totalVolume = 0.0
+    float buyPressure = 0.0
+    float sellPressure = 0.0
+    bool hasAbsorption = false
+    bool hasInternalSweep = false
+    int bullishBars = 0
+    int bearishBars = 0
+    int totalBars = 0
+    bool dataAvailable = false
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🔧 HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+isLondonOpen() => 
+    hour(time, "America/New_York") >= 3 and hour(time, "America/New_York") < 5
+
+isNYOpen() => 
+    h = hour(time, "America/New_York")
+    m = minute(time, "America/New_York")
+    (h == 9 and m >= 30) or (h >= 10 and h < 12)
+
+isAsianSession() => 
+    h = hour(time, "America/New_York")
+    h >= 18 or h < 3
+
+isActiveSession() =>
+    ENABLE_ALL_SESSIONS or
+    (ENABLE_LONDON_OPEN and isLondonOpen()) or 
+    (ENABLE_NY_OPEN and isNYOpen()) or 
+    (ENABLE_ASIAN and isAsianSession())
+
+getCandleMetrics(o, h, l, c) =>
+    totalRange = h - l
+    body = math.abs(c - o)
+    isBullish = c > o
+    upperWick = isBullish ? h - c : h - o
+    lowerWick = isBullish ? o - l : c - l
+    adverseWick = isBullish ? lowerWick : upperWick
+    fatBodyPct = totalRange > 0 ? (body / totalRange) * 100 : 0
+    adverseWickPct = totalRange > 0 ? (adverseWick / totalRange) * 100 : 0
+    [totalRange, body, fatBodyPct, adverseWickPct, isBullish]
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 📈 LOWER TIMEFRAME ANALYSIS (RANGE OR MINUTE)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+analyzeLowerTimeframe() =>
+    data = LowerTFData.new()
+    
+    // Get lower timeframe data using request.security_lower_tf
+    // Returns empty arrays if the requested TF is NOT lower than chart TF
+    [ltfOpen, ltfHigh, ltfLow, ltfClose, ltfVolume] = 
+         request.security_lower_tf(syminfo.tickerid, analysisTF, [open, high, low, close, volume])
+    
+    arraySize = array.size(ltfClose)
+    
+    if arraySize > 0
+        data.dataAvailable := true
+        
+        // Process each lower timeframe bar within this chart bar
+        for i = 0 to arraySize - 1
+            lOpen = array.get(ltfOpen, i)
+            lHigh = array.get(ltfHigh, i)
+            lLow = array.get(ltfLow, i)
+            lClose = array.get(ltfClose, i)
+            lVol = array.get(ltfVolume, i)
+            
+            isBullBar = lClose > lOpen
+            data.totalBars += 1
+            
+            if isBullBar
+                data.bullishBars += 1
+                data.buyVolume += lVol
+                data.trueDelta += lVol
+            else
+                data.bearishBars += 1
+                data.sellVolume += lVol
+                data.trueDelta -= lVol
+            
+            data.totalVolume += lVol
+        
+        // ABSORPTION DETECTION
+        // Look for high volume bars with small bodies (institutional accumulation/distribution)
+        for i = 0 to arraySize - 1
+            lHigh = array.get(ltfHigh, i)
+            lLow = array.get(ltfLow, i)
+            lOpen = array.get(ltfOpen, i)
+            lClose = array.get(ltfClose, i)
+            lVol = array.get(ltfVolume, i)
+            
+            barRange = lHigh - lLow
+            barBody = math.abs(lClose - lOpen)
+            avgVol = data.totalVolume / data.totalBars
+            
+            // Absorption: Small body (<30% of range) + High volume (>150% avg)
+            if barRange > 0 and (barBody / barRange) < 0.3 and lVol > avgVol * 1.5
+                data.hasAbsorption := true
+        
+        // INTERNAL SWEEP DETECTION
+        // Price sweeps a prior bar's high/low then reverses
+        if arraySize > 1
+            for i = 1 to arraySize - 1
+                currHigh = array.get(ltfHigh, i)
+                currLow = array.get(ltfLow, i)
+                currClose = array.get(ltfClose, i)
+                prevHigh = array.get(ltfHigh, i - 1)
+                prevLow = array.get(ltfLow, i - 1)
+                
+                // Bearish sweep: took out high, closed below it
+                if currHigh > prevHigh and currClose < prevHigh
+                    data.hasInternalSweep := true
+                // Bullish sweep: took out low, closed above it  
+                if currLow < prevLow and currClose > prevLow
+                    data.hasInternalSweep := true
+        
+        // Calculate pressure metrics
+        if data.totalVolume > 0
+            data.buyPressure := (data.buyVolume / data.totalVolume) * 100
+            data.sellPressure := (data.sellVolume / data.totalVolume) * 100
+    
+    data
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🎯 CONFLUENCE SCORING (10-POINT SCALE)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+calculateConfluence(ltfData, isBullish) =>
+    score = 0.0
+    
+    // If no intrabar data available, return base score from candle alone
+    if not ltfData.dataAvailable
+        score := 5.0  // Neutral - cannot confirm with intrabar
+    else
+        // 1. TRUE DELTA ALIGNMENT (2 points max)
+        // Delta should align with candle direction
+        deltaPct = ltfData.totalVolume > 0 ? 
+             math.abs(ltfData.trueDelta / ltfData.totalVolume) * 100 : 0
+        
+        if isBullish and ltfData.trueDelta > 0
+            score += deltaPct >= 70 ? 2.0 : deltaPct >= 50 ? 1.5 : deltaPct >= 30 ? 1.0 : 0.5
+        else if not isBullish and ltfData.trueDelta < 0
+            score += deltaPct >= 70 ? 2.0 : deltaPct >= 50 ? 1.5 : deltaPct >= 30 ? 1.0 : 0.5
+        // Misaligned delta = penalty
+        else
+            score += 0.0
+        
+        // 2. ABSORPTION DETECTION (1.5 points)
+        // Institutions absorbing counter-party orders
+        if ltfData.hasAbsorption
+            score += 1.5
+        
+        // 3. INTERNAL SWEEP (1.5 points)
+        // Stop hunt / liquidity grab pattern
+        if ltfData.hasInternalSweep
+            score += 1.5
+        
+        // 4. BAR CONSISTENCY (2 points max)
+        // How many intrabar bars align with the candle direction
+        if ltfData.totalBars > 0
+            bullRatio = float(ltfData.bullishBars) / float(ltfData.totalBars)
+            bearRatio = float(ltfData.bearishBars) / float(ltfData.totalBars)
+            
+            if isBullish
+                score += bullRatio >= 0.80 ? 2.0 : bullRatio >= 0.70 ? 1.5 : bullRatio >= 0.60 ? 1.0 : 0.5
+            else
+                score += bearRatio >= 0.80 ? 2.0 : bearRatio >= 0.70 ? 1.5 : bearRatio >= 0.60 ? 1.0 : 0.5
+        
+        // 5. VOLUME DISTRIBUTION (1.5 points max)
+        // Buy vs Sell pressure alignment
+        if isBullish and ltfData.buyPressure >= 75
+            score += 1.5
+        else if isBullish and ltfData.buyPressure >= 65
+            score += 1.0
+        else if isBullish and ltfData.buyPressure >= 55
+            score += 0.5
+        else if not isBullish and ltfData.sellPressure >= 75
+            score += 1.5
+        else if not isBullish and ltfData.sellPressure >= 65
+            score += 1.0
+        else if not isBullish and ltfData.sellPressure >= 55
+            score += 0.5
+        
+        // 6. SESSION BONUS (0.5 points)
+        // Active session = higher probability
+        if isLondonOpen() or isNYOpen()
+            score += 0.5
+        
+        // 7. MOMENTUM STRENGTH (1.0 point max)
+        // Recent bars showing strong directional bias
+        if ltfData.totalBars >= 3
+            recentThreshold = float(ltfData.totalBars) * 0.8
+            if isBullish and float(ltfData.bullishBars) >= recentThreshold
+                score += 1.0
+            else if not isBullish and float(ltfData.bearishBars) >= recentThreshold
+                score += 1.0
+            else
+                score += 0.3  // Partial credit
+        
+        // 8. CHART TIMEFRAME BONUS (0.5 points for higher TFs)
+        // Higher TFs = more significant moves
+        if currentTF >= 5
+            score += 0.5
+        else if currentTF >= 3
+            score += 0.3
+        else if currentTF >= 2
+            score += 0.2
+    
+    math.round(score * 10) / 10
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🚦 GOD MODE VALIDATION (6-GATE SYSTEM)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+passesGodMode(score, fatBodyPct, adverseWickPct, deltaDominance, ltfData, isBullish) =>
+    // GATE 1: Score threshold
+    gate1 = score >= GOD_MODE_SCORE_THRESHOLD
+    
+    // GATE 2: Fat body requirement
+    gate2 = fatBodyPct >= GOD_MODE_FAT_BODY
+    
+    // GATE 3: Minimal adverse wick
+    gate3 = adverseWickPct <= GOD_MODE_MAX_ADVERSE_WICK
+    
+    // GATE 4: Strong delta dominance
+    deltaPct = ltfData.totalVolume > 0 ? 
+         math.abs(ltfData.trueDelta / ltfData.totalVolume) * 100 : 0
+    gate4 = deltaPct >= GOD_MODE_DELTA_DOMINANCE
+    
+    // GATE 5: Active session (or override enabled)
+    gate5 = isActiveSession()
+    
+    // GATE 6: Consistent intrabar pressure
+    gate6 = false
+    if ltfData.totalBars > 0
+        consistency = isBullish ? 
+             (float(ltfData.bullishBars) / float(ltfData.totalBars)) : 
+             (float(ltfData.bearishBars) / float(ltfData.totalBars))
+        
+        // Adaptive consistency based on chart timeframe
+        // Higher TFs = slightly more lenient (larger moves)
+        requiredConsistency = currentTF >= 5 ? 0.70 : 
+             currentTF >= 3 ? 0.72 :  
+             currentTF >= 2 ? 0.74 :  
+             currentTF >= 1 ? 0.75 : 
+             0.78  // Stricter for Range charts
+        
+        gate6 := consistency >= requiredConsistency
+    
+    // Must pass ALL 6 gates
+    gate1 and gate2 and gate3 and gate4 and gate5 and gate6
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🎨 MAIN ANALYSIS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+[totalRange, body, fatBodyPct, adverseWickPct, isBullish] = getCandleMetrics(open, high, low, close)
+ltfData = analyzeLowerTimeframe()
+confluenceScore = calculateConfluence(ltfData, isBullish)
+deltaDominance = ltfData.totalVolume > 0 ? 
+     math.abs(ltfData.trueDelta / ltfData.totalVolume) * 100 : 0
+
+isGodMode = passesGodMode(confluenceScore, fatBodyPct, adverseWickPct, deltaDominance, ltfData, isBullish)
+
+tier = confluenceScore >= S_TIER_THRESHOLD ? "S" :
+     confluenceScore >= A_TIER_THRESHOLD ? "A" :
+     confluenceScore >= B_TIER_THRESHOLD ? "B" : "C"
+
+signalClass = isGodMode ? "GOD" :
+     confluenceScore >= S_TIER_THRESHOLD ? "EXCELLENT" :
+     confluenceScore >= A_TIER_THRESHOLD ? "EXCELLENT" : "MEDIUM"
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 📍 VISUAL SIGNALS - ULTRA-CONSERVATIVE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+showSignal = false
+if CHALLENGE_MODE
+    // ULTRA SAFE: Only S-Tier GOD MODE
+    showSignal := isGodMode and tier == "S" and SHOW_GOD_MODE and ltfData.dataAvailable
+else
+    // Normal mode - still requires intrabar data
+    showSignal := ltfData.dataAvailable and (
+         (signalClass == "GOD" and SHOW_GOD_MODE) or
+         (signalClass == "EXCELLENT" and SHOW_EXCELLENT) or
+         (signalClass == "MEDIUM" and SHOW_MEDIUM))
+
+if showSignal
+    labelText = signalClass == "GOD" ? "G" : signalClass == "EXCELLENT" ? "E" : "M"
+    labelText += tier == "S" ? "ˢ" : tier == "A" ? "ᴬ" : tier == "B" ? "ᴮ" : ""
+    
+    if SHOW_TIMEFRAME_LABEL
+        labelText += "\n" + getChartTimeframeLabel()
+    
+    labelColor = signalClass == "GOD" ? color.new(color.aqua, 0) :
+         signalClass == "EXCELLENT" ? color.new(color.lime, 0) :
+         color.new(color.yellow, 30)
+    
+    labelY = isBullish ? low : high
+    labelStyle = isBullish ? label.style_label_up : label.style_label_down
+    
+    // Calculate risk/reward based on candle direction
+    stopPrice = isBullish ? close - DEFAULT_STOP_POINTS : close + DEFAULT_STOP_POINTS
+    targetPrice = isBullish ? close + DEFAULT_TARGET_POINTS : close - DEFAULT_TARGET_POINTS
+    stopDollar = DEFAULT_STOP_POINTS * 2  // $2 per point for MNQ
+    targetDollar = DEFAULT_TARGET_POINTS * 2
+    
+    tooltipText = "🎯 " + signalClass + " | Tier: " + tier + " | Chart: " + getChartTimeframeLabel() +
+         "\n━━━━━━━━━━━━━━━━" +
+         "\n📊 Analysis TF: " + analysisTF +
+         "\n⭐ Score: " + str.tostring(confluenceScore, "#.#") + " / 10.0" +
+         "\n⚡ Delta: " + str.tostring(deltaDominance, "#.#") + "%" +
+         "\n💪 Fat Body: " + str.tostring(fatBodyPct, "#.#") + "%" +
+         "\n🚫 Adverse Wick: " + str.tostring(adverseWickPct, "#.#") + "%" +
+         "\n━━━━━━━━━━━━━━━━" +
+         "\n📈 LTF Bars: " + str.tostring(ltfData.totalBars) + 
+              " (🟢" + str.tostring(ltfData.bullishBars) + " / 🔴" + str.tostring(ltfData.bearishBars) + ")" +
+         "\n📊 Buy Pressure: " + str.tostring(ltfData.buyPressure, "#.#") + "%" +
+         "\n📊 Sell Pressure: " + str.tostring(ltfData.sellPressure, "#.#") + "%" +
+         (ltfData.hasAbsorption ? "\n✅ ABSORPTION DETECTED" : "") +
+         (ltfData.hasInternalSweep ? "\n✅ INTERNAL SWEEP" : "") +
+         "\n━━━━━━━━━━━━━━━━" +
+         "\n💰 1 MNQ SETUP:" +
+         "\n🎯 Entry: " + str.tostring(close, "#.##") +
+         "\n🛑 Stop: " + str.tostring(stopPrice, "#.##") + " (-$" + str.tostring(stopDollar, "#") + ")" +
+         "\n💵 Target: " + str.tostring(targetPrice, "#.##") + " (+$" + str.tostring(targetDollar, "#") + ")"
+    
+    label.new(
+        x=bar_index, 
+        y=labelY, 
+        text=labelText, 
+        xloc=xloc.bar_index, 
+        yloc=yloc.price,
+        style=labelStyle, 
+        color=labelColor, 
+        size=LABEL_SIZE == "tiny" ? size.tiny : LABEL_SIZE == "small" ? size.small : size.normal, 
+        textcolor=color.black, 
+        tooltip=tooltipText
+    )
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 🎯 ALERTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+if showSignal and barstate.isconfirmed
+    direction = isBullish ? "LONG" : "SHORT"
+    stopPrice = isBullish ? close - DEFAULT_STOP_POINTS : close + DEFAULT_STOP_POINTS
+    targetPrice = isBullish ? close + DEFAULT_TARGET_POINTS : close - DEFAULT_TARGET_POINTS
+    
+    alertMsg = "💎 " + signalClass + " " + direction + 
+         " | Chart: " + getChartTimeframeLabel() + 
+         " | Analysis: " + analysisTF +
+         " | Score: " + str.tostring(confluenceScore, "#.#") + 
+         " | Tier: " + tier +
+         "\n🎯 Entry: " + str.tostring(close, "#.##") +
+         "\n🛑 Stop: " + str.tostring(stopPrice, "#.##") +
+         "\n💰 Target: " + str.tostring(targetPrice, "#.##")
+    
+    alert(alertMsg, alert.freq_once_per_bar)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 📊 INTRABAR STATUS TABLE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+var table statusTable = table.new(position.top_right, 2, 5, 
+     bgcolor=color.new(color.black, 85),
+     frame_width=1,
+     frame_color=color.new(color.gray, 70))
+
+if barstate.islast and SHOW_IB_STATUS_TABLE
+    // Mode indicator
+    modeText = CHALLENGE_MODE ? "🚨 CHALLENGE" : "📊 STANDARD"
+    modeColor = CHALLENGE_MODE ? color.rgb(255, 82, 82) : color.rgb(0, 230, 118)
+    table.cell(statusTable, 0, 0, modeText, text_color=modeColor, text_size=size.small)
+    table.cell(statusTable, 1, 0, CHALLENGE_MODE ? "S-Tier ONLY" : "All Tiers", 
+         text_color=color.white, text_size=size.tiny)
+    
+    // Intrabar Status
+    ibStatusText = ltfData.dataAvailable ? "✅ ACTIVE" : "⚠️ INVALID"
+    ibStatusColor = ltfData.dataAvailable ? color.rgb(0, 230, 118) : color.rgb(255, 193, 7)
+    table.cell(statusTable, 0, 1, "IB Data:", text_color=color.gray, text_size=size.tiny)
+    table.cell(statusTable, 1, 1, ibStatusText, text_color=ibStatusColor, text_size=size.tiny)
+    
+    // Analysis Timeframe
+    table.cell(statusTable, 0, 2, "Analysis TF:", text_color=color.gray, text_size=size.tiny)
+    table.cell(statusTable, 1, 2, analysisTF, text_color=color.white, text_size=size.tiny)
+    
+    // Chart Timeframe
+    table.cell(statusTable, 0, 3, "Chart TF:", text_color=color.gray, text_size=size.tiny)
+    table.cell(statusTable, 1, 3, getChartTimeframeLabel(), text_color=color.white, text_size=size.tiny)
+    
+    // LTF Bars Count
+    barsText = ltfData.dataAvailable ? str.tostring(ltfData.totalBars) + " bars" : "N/A"
+    table.cell(statusTable, 0, 4, "LTF Bars:", text_color=color.gray, text_size=size.tiny)
+    table.cell(statusTable, 1, 4, barsText, text_color=color.white, text_size=size.tiny)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ⚠️ INVALID TIMEFRAME WARNING LABEL
+// ═══════════════════════════════════════════════════════════════════════════════
+
+if barstate.islast and not ltfData.dataAvailable
+    warningLabel = label.new(
+        x=bar_index - 10, 
+        y=high, 
+        text="⚠️ INTRABAR TF INVALID\n" + analysisTF + " is NOT lower than\nyour chart TF: " + getChartTimeframeLabel() + 
+             "\n\nChange Analysis TF\nor use higher chart TF",
+        xloc=xloc.bar_index, 
+        yloc=yloc.price,
+        style=label.style_label_lower_left, 
+        color=color.new(color.orange, 10), 
+        size=size.normal, 
+        textcolor=color.black
+    )
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 📊 BACKGROUND HIGHLIGHT
+// ═══════════════════════════════════════════════════════════════════════════════
+
+bgcolor(isGodMode and tier == "S" and ltfData.dataAvailable ? color.new(color.aqua, 93) : na)
