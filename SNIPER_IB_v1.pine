@@ -1,0 +1,646 @@
+//@version=6
+indicator("SNIPER Initial Balance V1", shorttitle="SNIPER IB V1", overlay=true, max_lines_count=500, max_boxes_count=200, max_labels_count=200)
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// SNIPER INITIAL BALANCE V1
+// Built for precision trading on futures markets (ES, NQ, YM, GC, CL, BTC)
+// 
+// FEATURES:
+// - Auto-detects IB period based on market type (Gold vs Index vs Energy)
+// - IB High/Low/Mid with extensions (50%, 100%, 1SD, 2SD)
+// - VWAP-based balance/imbalance detection
+// - Breakout confirmation signals with anti-fakeout filtering
+// - Retest pattern detection with engulfing confirmation
+// - Volume and momentum validation
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// INPUTS
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Market Selection (determines IB time)
+marketType = input.string("Index", "Market Type", options=["Index", "Gold", "Energy", "Custom"], 
+    group="Market Settings", 
+    tooltip="Index (ES/NQ/YM): 9:30-10:30 ET\nGold (GC/MGC): 8:30-9:30 ET\nEnergy (CL): 9:00-10:00 ET")
+
+// Custom IB Times (only used if Custom selected)
+customStartHour = input.int(9, "Custom Start Hour", minval=0, maxval=23, group="Custom IB Time")
+customStartMin = input.int(30, "Custom Start Minute", minval=0, maxval=59, group="Custom IB Time")
+customEndHour = input.int(10, "Custom End Hour", minval=0, maxval=23, group="Custom IB Time")
+customEndMin = input.int(30, "Custom End Minute", minval=0, maxval=59, group="Custom IB Time")
+
+// IB Display Settings
+showIBBox = input.bool(true, "Show IB Range Box", group="IB Display")
+showMidLine = input.bool(true, "Show IB Midpoint", group="IB Display")
+show50Ext = input.bool(true, "Show 50% Extension", group="IB Display")
+show100Ext = input.bool(true, "Show 100% Extension", group="IB Display")
+show1SD = input.bool(true, "Show 1 Std Dev (±1.28)", group="IB Display")
+show2SD = input.bool(true, "Show 2 Std Dev (±2.0)", group="IB Display")
+
+// Extension Multipliers
+ext50Mult = input.float(0.5, "50% Extension Multiplier", minval=0.1, maxval=1.0, step=0.1, group="Extensions")
+ext100Mult = input.float(1.0, "100% Extension Multiplier", minval=0.5, maxval=2.0, step=0.1, group="Extensions")
+sd1Mult = input.float(1.28, "1 SD Multiplier", minval=0.5, maxval=2.0, step=0.01, group="Extensions", 
+    tooltip="1.28 = ~80% of moves stay within this range")
+sd2Mult = input.float(2.0, "2 SD Multiplier", minval=1.0, maxval=3.0, step=0.1, group="Extensions",
+    tooltip="2.0 = ~95% of moves stay within this range")
+
+// Colors
+colorIBHigh = input.color(color.new(#4CAF50, 0), "IB High", group="Colors")
+colorIBLow = input.color(color.new(#F44336, 0), "IB Low", group="Colors")
+colorIBMid = input.color(color.new(#FFC107, 0), "IB Mid", group="Colors")
+colorIBBox = input.color(color.new(#2196F3, 85), "IB Box Fill", group="Colors")
+color50Ext = input.color(color.new(#9C27B0, 30), "50% Extension", group="Colors")
+color100Ext = input.color(color.new(#E91E63, 30), "100% Extension", group="Colors")
+color1SD = input.color(color.new(#00BCD4, 30), "1 SD Level", group="Colors")
+color2SD = input.color(color.new(#FF5722, 30), "2 SD Level", group="Colors")
+
+// Line Settings
+lineWidth = input.int(2, "Primary Line Width", minval=1, maxval=5, group="Line Settings")
+extLineWidth = input.int(1, "Extension Line Width", minval=1, maxval=3, group="Line Settings")
+
+// Signal Settings
+showBreakoutSignals = input.bool(true, "Show Breakout Signals", group="Signals")
+showRetestSignals = input.bool(true, "Show Retest Signals", group="Signals")
+minVolMultiplier = input.float(1.3, "Min Volume Multiplier for Signal", minval=1.0, maxval=3.0, step=0.1, group="Signals",
+    tooltip="Volume must be this many times the average for a valid signal")
+minBodyPercent = input.float(60.0, "Min Body % of Candle", minval=40, maxval=90, step=5, group="Signals",
+    tooltip="Candle body must be at least this % of total range to confirm momentum")
+
+// VWAP Settings
+showVWAP = input.bool(true, "Show Session VWAP", group="VWAP")
+showVWAPBands = input.bool(true, "Show VWAP Bands (1SD)", group="VWAP")
+vwapColor = input.color(color.new(#FF9800, 0), "VWAP Color", group="VWAP")
+
+// Balance Zone Detection
+showBalanceZone = input.bool(true, "Highlight Balance Zone", group="Balance Detection",
+    tooltip="Highlights when price is ranging within VWAP ±1SD and IB range")
+
+// Label Size
+labelSize = input.string("Small", "Label Size", options=["Tiny", "Small", "Normal"], group="Display")
+labelSizeFormat = labelSize == "Tiny" ? size.tiny : labelSize == "Small" ? size.small : size.normal
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// TIME ZONE AND SESSION DETECTION
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+string tz = "America/New_York"
+
+// Get IB start/end times based on market type
+getIBTimes() =>
+    int startH = 9
+    int startM = 30
+    int endH = 10
+    int endM = 30
+    
+    if marketType == "Gold"
+        startH := 8
+        startM := 30
+        endH := 9
+        endM := 30
+    else if marketType == "Energy"
+        startH := 9
+        startM := 0
+        endH := 10
+        endM := 0
+    else if marketType == "Custom"
+        startH := customStartHour
+        startM := customStartMin
+        endH := customEndHour
+        endM := customEndMin
+    // Index uses default 9:30-10:30
+    
+    [startH, startM, endH, endM]
+
+[ibStartH, ibStartM, ibEndH, ibEndM] = getIBTimes()
+
+// Current time components
+int currentHour = hour(time, tz)
+int currentMinute = minute(time, tz)
+int currentTimeMinutes = currentHour * 60 + currentMinute
+
+// IB period boundaries in minutes from midnight
+int ibStartMinutes = ibStartH * 60 + ibStartM
+int ibEndMinutes = ibEndH * 60 + ibEndM
+
+// Session end (for Index: 4:00 PM, Gold: 1:30 PM, Energy: 2:30 PM)
+int sessionEndMinutes = marketType == "Gold" ? 13 * 60 + 30 : marketType == "Energy" ? 14 * 60 + 30 : 16 * 60
+
+// IB Period Detection
+bool inIBPeriod = currentTimeMinutes >= ibStartMinutes and currentTimeMinutes < ibEndMinutes
+bool isIBStart = currentTimeMinutes >= ibStartMinutes and currentTimeMinutes < ibStartMinutes + (timeframe.in_seconds() / 60)
+bool isIBEnd = currentTimeMinutes >= ibEndMinutes and currentTimeMinutes < ibEndMinutes + (timeframe.in_seconds() / 60)
+
+// Post-IB Session (after IB but before session end)
+bool inPostIBSession = currentTimeMinutes >= ibEndMinutes and currentTimeMinutes < sessionEndMinutes
+
+// Session Start Detection (for VWAP reset)
+bool isSessionStart = currentTimeMinutes >= ibStartMinutes and currentTimeMinutes < ibStartMinutes + (timeframe.in_seconds() / 60)
+
+// Previous bar checks
+int prevTimeMinutes = hour(time[1], tz) * 60 + minute(time[1], tz)
+bool wasInIBPeriod = prevTimeMinutes >= ibStartMinutes and prevTimeMinutes < ibEndMinutes
+bool ibJustCompleted = wasInIBPeriod and not inIBPeriod
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// IB STATE VARIABLES
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+var float ibHigh = na
+var float ibLow = na
+var float ibMid = na
+var float ibRange = na
+var bool ibComplete = false
+var int ibStartBar = na
+
+// Extension levels
+var float ext50Up = na
+var float ext50Down = na
+var float ext100Up = na
+var float ext100Down = na
+var float sd1Up = na
+var float sd1Down = na
+var float sd2Up = na
+var float sd2Down = na
+
+// Line objects
+var line lineIBHigh = na
+var line lineIBLow = na
+var line lineIBMid = na
+var line lineExt50Up = na
+var line lineExt50Down = na
+var line lineExt100Up = na
+var line lineExt100Down = na
+var line lineSD1Up = na
+var line lineSD1Down = na
+var line lineSD2Up = na
+var line lineSD2Down = na
+
+// Box object
+var box ibBox = na
+
+// Labels
+var label labelIBHigh = na
+var label labelIBLow = na
+var label labelIBMid = na
+var label labelExt50Up = na
+var label labelExt50Down = na
+var label labelExt100Up = na
+var label labelExt100Down = na
+var label labelSD1Up = na
+var label labelSD1Down = na
+var label labelSD2Up = na
+var label labelSD2Down = na
+
+// Breakout tracking
+var bool brokeIBHigh = false
+var bool brokeIBLow = false
+var int breakoutBar = na
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// VWAP CALCULATION (Session Anchored)
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+var float vwapSum = 0.0
+var float volumeSum = 0.0
+var float vwapSqSum = 0.0
+
+// Reset VWAP at session start
+if isSessionStart
+    vwapSum := 0.0
+    volumeSum := 0.0
+    vwapSqSum := 0.0
+
+// Accumulate during session
+if inIBPeriod or inPostIBSession
+    float tp = hlc3
+    vwapSum += tp * volume
+    volumeSum += volume
+    vwapSqSum += tp * tp * volume
+
+float vwap_val = volumeSum > 0 ? vwapSum / volumeSum : na
+float vwapVariance = volumeSum > 0 ? (vwapSqSum / volumeSum) - (vwap_val * vwap_val) : na
+float vwapSD = vwapVariance > 0 ? math.sqrt(vwapVariance) : na
+
+float vwapUpper = not na(vwap_val) and not na(vwapSD) ? vwap_val + vwapSD : na
+float vwapLower = not na(vwap_val) and not na(vwapSD) ? vwap_val - vwapSD : na
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// VOLUME ANALYSIS
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Rolling volume average (20 periods)
+float avgVolume = ta.sma(volume, 20)
+bool isHighVolume = volume >= avgVolume * minVolMultiplier
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// CANDLE ANALYSIS FUNCTIONS
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Calculate candle body percentage
+getBodyPercent() =>
+    float candleRange = high - low
+    float bodySize = math.abs(close - open)
+    candleRange > 0 ? (bodySize / candleRange) * 100 : 0
+
+// Check if candle is bullish with strong body
+isBullishMomentum() =>
+    bool isBullish = close > open
+    float bodyPct = getBodyPercent()
+    bool strongBody = bodyPct >= minBodyPercent
+    isBullish and strongBody
+
+// Check if candle is bearish with strong body
+isBearishMomentum() =>
+    bool isBearish = close < open
+    float bodyPct = getBodyPercent()
+    bool strongBody = bodyPct >= minBodyPercent
+    isBearish and strongBody
+
+// Bullish engulfing pattern
+isBullishEngulfing() =>
+    bool prevBearish = close[1] < open[1]
+    bool currBullish = close > open
+    bool engulfs = close > open[1] and open < close[1]
+    bool strongBody = getBodyPercent() >= 50
+    prevBearish and currBullish and engulfs and strongBody
+
+// Bearish engulfing pattern
+isBearishEngulfing() =>
+    bool prevBullish = close[1] > open[1]
+    bool currBearish = close < open
+    bool engulfs = close < open[1] and open > close[1]
+    bool strongBody = getBodyPercent() >= 50
+    prevBullish and currBearish and engulfs and strongBody
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// IB FORMATION LOGIC
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Reset at IB start
+if isSessionStart
+    ibHigh := high
+    ibLow := low
+    ibComplete := false
+    ibStartBar := bar_index
+    brokeIBHigh := false
+    brokeIBLow := false
+    breakoutBar := na
+    
+    // Delete previous session objects
+    if not na(lineIBHigh)
+        line.delete(lineIBHigh)
+        line.delete(lineIBLow)
+        line.delete(lineIBMid)
+        lineIBHigh := na
+        lineIBLow := na
+        lineIBMid := na
+    
+    if not na(lineExt50Up)
+        line.delete(lineExt50Up)
+        line.delete(lineExt50Down)
+        line.delete(lineExt100Up)
+        line.delete(lineExt100Down)
+        line.delete(lineSD1Up)
+        line.delete(lineSD1Down)
+        line.delete(lineSD2Up)
+        line.delete(lineSD2Down)
+        lineExt50Up := na
+        lineExt50Down := na
+        lineExt100Up := na
+        lineExt100Down := na
+        lineSD1Up := na
+        lineSD1Down := na
+        lineSD2Up := na
+        lineSD2Down := na
+    
+    if not na(ibBox)
+        box.delete(ibBox)
+        ibBox := na
+    
+    // Delete labels
+    if not na(labelIBHigh)
+        label.delete(labelIBHigh)
+        label.delete(labelIBLow)
+        label.delete(labelIBMid)
+        labelIBHigh := na
+        labelIBLow := na
+        labelIBMid := na
+    
+    if not na(labelExt50Up)
+        label.delete(labelExt50Up)
+        label.delete(labelExt50Down)
+        label.delete(labelExt100Up)
+        label.delete(labelExt100Down)
+        label.delete(labelSD1Up)
+        label.delete(labelSD1Down)
+        label.delete(labelSD2Up)
+        label.delete(labelSD2Down)
+        labelExt50Up := na
+        labelExt50Down := na
+        labelExt100Up := na
+        labelExt100Down := na
+        labelSD1Up := na
+        labelSD1Down := na
+        labelSD2Up := na
+        labelSD2Down := na
+
+// Update IB during formation
+if inIBPeriod and not ibComplete
+    if high > ibHigh or na(ibHigh)
+        ibHigh := high
+    if low < ibLow or na(ibLow)
+        ibLow := low
+
+// Mark IB complete
+if ibJustCompleted and not ibComplete
+    ibComplete := true
+    ibMid := (ibHigh + ibLow) / 2
+    ibRange := ibHigh - ibLow
+    
+    // Calculate extensions
+    ext50Up := ibHigh + (ibRange * ext50Mult)
+    ext50Down := ibLow - (ibRange * ext50Mult)
+    ext100Up := ibHigh + (ibRange * ext100Mult)
+    ext100Down := ibLow - (ibRange * ext100Mult)
+    sd1Up := ibHigh + (ibRange * sd1Mult)
+    sd1Down := ibLow - (ibRange * sd1Mult)
+    sd2Up := ibHigh + (ibRange * sd2Mult)
+    sd2Down := ibLow - (ibRange * sd2Mult)
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// DRAW IB LEVELS
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+if ibComplete and (inPostIBSession or inIBPeriod)
+    int startX = ibStartBar
+    int endX = bar_index
+    
+    // IB High Line
+    if na(lineIBHigh)
+        lineIBHigh := line.new(startX, ibHigh, endX, ibHigh, color=colorIBHigh, width=lineWidth, style=line.style_solid)
+        labelIBHigh := label.new(endX, ibHigh, "IB High", style=label.style_label_left, color=color.new(color.black, 100), textcolor=colorIBHigh, size=labelSizeFormat)
+    else
+        line.set_x2(lineIBHigh, endX)
+        label.set_x(labelIBHigh, endX)
+    
+    // IB Low Line
+    if na(lineIBLow)
+        lineIBLow := line.new(startX, ibLow, endX, ibLow, color=colorIBLow, width=lineWidth, style=line.style_solid)
+        labelIBLow := label.new(endX, ibLow, "IB Low", style=label.style_label_left, color=color.new(color.black, 100), textcolor=colorIBLow, size=labelSizeFormat)
+    else
+        line.set_x2(lineIBLow, endX)
+        label.set_x(labelIBLow, endX)
+    
+    // IB Mid Line (dashed)
+    if showMidLine
+        if na(lineIBMid)
+            lineIBMid := line.new(startX, ibMid, endX, ibMid, color=colorIBMid, width=1, style=line.style_dashed)
+            labelIBMid := label.new(endX, ibMid, "IB Mid", style=label.style_label_left, color=color.new(color.black, 100), textcolor=colorIBMid, size=labelSizeFormat)
+        else
+            line.set_x2(lineIBMid, endX)
+            label.set_x(labelIBMid, endX)
+    
+    // IB Box
+    if showIBBox
+        if na(ibBox)
+            ibBox := box.new(startX, ibHigh, endX, ibLow, border_color=color.new(colorIBBox, 60), bgcolor=colorIBBox, border_width=1)
+        else
+            box.set_right(ibBox, endX)
+    
+    // 50% Extension
+    if show50Ext
+        if na(lineExt50Up)
+            lineExt50Up := line.new(endX - 1, ext50Up, endX, ext50Up, color=color50Ext, width=extLineWidth, style=line.style_dotted)
+            lineExt50Down := line.new(endX - 1, ext50Down, endX, ext50Down, color=color50Ext, width=extLineWidth, style=line.style_dotted)
+            labelExt50Up := label.new(endX, ext50Up, "50%", style=label.style_label_left, color=color.new(color.black, 100), textcolor=color50Ext, size=labelSizeFormat)
+            labelExt50Down := label.new(endX, ext50Down, "50%", style=label.style_label_left, color=color.new(color.black, 100), textcolor=color50Ext, size=labelSizeFormat)
+        else
+            line.set_x1(lineExt50Up, ibStartBar)
+            line.set_x2(lineExt50Up, endX)
+            line.set_x1(lineExt50Down, ibStartBar)
+            line.set_x2(lineExt50Down, endX)
+            label.set_x(labelExt50Up, endX)
+            label.set_x(labelExt50Down, endX)
+    
+    // 100% Extension
+    if show100Ext
+        if na(lineExt100Up)
+            lineExt100Up := line.new(endX - 1, ext100Up, endX, ext100Up, color=color100Ext, width=extLineWidth, style=line.style_dotted)
+            lineExt100Down := line.new(endX - 1, ext100Down, endX, ext100Down, color=color100Ext, width=extLineWidth, style=line.style_dotted)
+            labelExt100Up := label.new(endX, ext100Up, "100%", style=label.style_label_left, color=color.new(color.black, 100), textcolor=color100Ext, size=labelSizeFormat)
+            labelExt100Down := label.new(endX, ext100Down, "100%", style=label.style_label_left, color=color.new(color.black, 100), textcolor=color100Ext, size=labelSizeFormat)
+        else
+            line.set_x1(lineExt100Up, ibStartBar)
+            line.set_x2(lineExt100Up, endX)
+            line.set_x1(lineExt100Down, ibStartBar)
+            line.set_x2(lineExt100Down, endX)
+            label.set_x(labelExt100Up, endX)
+            label.set_x(labelExt100Down, endX)
+    
+    // 1 SD Extension
+    if show1SD
+        if na(lineSD1Up)
+            lineSD1Up := line.new(endX - 1, sd1Up, endX, sd1Up, color=color1SD, width=extLineWidth, style=line.style_dashed)
+            lineSD1Down := line.new(endX - 1, sd1Down, endX, sd1Down, color=color1SD, width=extLineWidth, style=line.style_dashed)
+            labelSD1Up := label.new(endX, sd1Up, "1SD", style=label.style_label_left, color=color.new(color.black, 100), textcolor=color1SD, size=labelSizeFormat)
+            labelSD1Down := label.new(endX, sd1Down, "1SD", style=label.style_label_left, color=color.new(color.black, 100), textcolor=color1SD, size=labelSizeFormat)
+        else
+            line.set_x1(lineSD1Up, ibStartBar)
+            line.set_x2(lineSD1Up, endX)
+            line.set_x1(lineSD1Down, ibStartBar)
+            line.set_x2(lineSD1Down, endX)
+            label.set_x(labelSD1Up, endX)
+            label.set_x(labelSD1Down, endX)
+    
+    // 2 SD Extension
+    if show2SD
+        if na(lineSD2Up)
+            lineSD2Up := line.new(endX - 1, sd2Up, endX, sd2Up, color=color2SD, width=extLineWidth, style=line.style_dashed)
+            lineSD2Down := line.new(endX - 1, sd2Down, endX, sd2Down, color=color2SD, width=extLineWidth, style=line.style_dashed)
+            labelSD2Up := label.new(endX, sd2Up, "2SD", style=label.style_label_left, color=color.new(color.black, 100), textcolor=color2SD, size=labelSizeFormat)
+            labelSD2Down := label.new(endX, sd2Down, "2SD", style=label.style_label_left, color=color.new(color.black, 100), textcolor=color2SD, size=labelSizeFormat)
+        else
+            line.set_x1(lineSD2Up, ibStartBar)
+            line.set_x2(lineSD2Up, endX)
+            line.set_x1(lineSD2Down, ibStartBar)
+            line.set_x2(lineSD2Down, endX)
+            label.set_x(labelSD2Up, endX)
+            label.set_x(labelSD2Down, endX)
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// BREAKOUT DETECTION WITH CONFIRMATION
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Breakout above IB High - requires:
+// 1. Close above IB High (not just wick)
+// 2. Above average volume
+// 3. Strong bullish body
+bool validBreakoutUp = ibComplete and 
+                       inPostIBSession and 
+                       not brokeIBHigh and 
+                       close > ibHigh and 
+                       close[1] <= ibHigh and
+                       isHighVolume and 
+                       isBullishMomentum()
+
+// Breakout below IB Low
+bool validBreakoutDown = ibComplete and 
+                         inPostIBSession and 
+                         not brokeIBLow and 
+                         close < ibLow and 
+                         close[1] >= ibLow and
+                         isHighVolume and 
+                         isBearishMomentum()
+
+// Track breakouts
+if validBreakoutUp
+    brokeIBHigh := true
+    breakoutBar := bar_index
+
+if validBreakoutDown
+    brokeIBLow := true
+    breakoutBar := bar_index
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// RETEST DETECTION
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Retest of IB High after breakout (bullish continuation)
+bool retestIBHighBullish = brokeIBHigh and 
+                           bar_index > breakoutBar + 1 and
+                           low <= ibHigh and low >= ibHigh - (ibRange * 0.1) and  // Touches or comes within 10% of IB range
+                           close > ibHigh and
+                           isBullishEngulfing()
+
+// Retest of IB Low after breakout (bearish continuation)
+bool retestIBLowBearish = brokeIBLow and 
+                          bar_index > breakoutBar + 1 and
+                          high >= ibLow and high <= ibLow + (ibRange * 0.1) and
+                          close < ibLow and
+                          isBearishEngulfing()
+
+// Failed breakout detection (fakeout)
+bool fakeoutUp = brokeIBHigh and 
+                 bar_index > breakoutBar and
+                 close < ibMid and  // Price fell back below mid
+                 isBearishMomentum()
+
+bool fakeoutDown = brokeIBLow and 
+                   bar_index > breakoutBar and
+                   close > ibMid and
+                   isBullishMomentum()
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// BALANCE ZONE DETECTION
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Price is in balance when:
+// 1. Within IB range
+// 2. Near VWAP (within 1 SD)
+// 3. Not trending strongly
+bool inBalance = ibComplete and 
+                 close >= ibLow and 
+                 close <= ibHigh and
+                 not na(vwap_val) and not na(vwapSD) and
+                 close >= vwapLower and 
+                 close <= vwapUpper
+
+// Balance zone background
+bgcolor(showBalanceZone and inBalance ? color.new(#9E9E9E, 90) : na, title="Balance Zone")
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// PLOT SIGNALS
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Breakout signals
+plotshape(showBreakoutSignals and validBreakoutUp, "Breakout Up", shape.triangleup, location.belowbar, 
+          color.new(#00E676, 0), size=size.normal, text="IB↑", textcolor=color.new(#00E676, 0))
+plotshape(showBreakoutSignals and validBreakoutDown, "Breakout Down", shape.triangledown, location.abovebar, 
+          color.new(#FF5252, 0), size=size.normal, text="IB↓", textcolor=color.new(#FF5252, 0))
+
+// Retest signals (higher priority entries)
+plotshape(showRetestSignals and retestIBHighBullish, "Retest Long", shape.labelup, location.belowbar, 
+          color.new(#00E676, 0), size=size.small, text="RT↑", textcolor=color.white)
+plotshape(showRetestSignals and retestIBLowBearish, "Retest Short", shape.labeldown, location.abovebar, 
+          color.new(#FF5252, 0), size=size.small, text="RT↓", textcolor=color.white)
+
+// Fakeout warnings
+plotshape(fakeoutUp, "Fakeout Up Warning", shape.xcross, location.abovebar, 
+          color.new(#FF9800, 0), size=size.tiny, text="FK", textcolor=color.new(#FF9800, 0))
+plotshape(fakeoutDown, "Fakeout Down Warning", shape.xcross, location.belowbar, 
+          color.new(#FF9800, 0), size=size.tiny, text="FK", textcolor=color.new(#FF9800, 0))
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// PLOT VWAP
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+plot(showVWAP and (inIBPeriod or inPostIBSession) ? vwap_val : na, "VWAP", vwapColor, linewidth=2)
+plot(showVWAPBands and (inIBPeriod or inPostIBSession) ? vwapUpper : na, "VWAP Upper", color.new(vwapColor, 60), linewidth=1, style=plot.style_circles)
+plot(showVWAPBands and (inIBPeriod or inPostIBSession) ? vwapLower : na, "VWAP Lower", color.new(vwapColor, 60), linewidth=1, style=plot.style_circles)
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// INFO TABLE
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+var table infoTable = table.new(position.top_right, 2, 10, border_width=1)
+
+if ibComplete and (inIBPeriod or inPostIBSession)
+    // Header
+    table.cell(infoTable, 0, 0, "SNIPER IB V1", text_color=color.white, bgcolor=color.new(#1565C0, 20), text_size=size.small)
+    table.cell(infoTable, 1, 0, marketType, text_color=color.white, bgcolor=color.new(#1565C0, 20), text_size=size.small)
+    
+    // IB Range
+    table.cell(infoTable, 0, 1, "IB Range", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 1, str.tostring(ibRange, format.mintick), text_color=color.white, text_size=size.tiny)
+    
+    // IB High
+    table.cell(infoTable, 0, 2, "IB High", text_color=colorIBHigh, text_size=size.tiny)
+    table.cell(infoTable, 1, 2, str.tostring(ibHigh, format.mintick), text_color=color.white, text_size=size.tiny)
+    
+    // IB Low
+    table.cell(infoTable, 0, 3, "IB Low", text_color=colorIBLow, text_size=size.tiny)
+    table.cell(infoTable, 1, 3, str.tostring(ibLow, format.mintick), text_color=color.white, text_size=size.tiny)
+    
+    // IB Mid
+    table.cell(infoTable, 0, 4, "IB Mid", text_color=colorIBMid, text_size=size.tiny)
+    table.cell(infoTable, 1, 4, str.tostring(ibMid, format.mintick), text_color=color.white, text_size=size.tiny)
+    
+    // VWAP
+    table.cell(infoTable, 0, 5, "VWAP", text_color=vwapColor, text_size=size.tiny)
+    table.cell(infoTable, 1, 5, str.tostring(vwap_val, format.mintick), text_color=color.white, text_size=size.tiny)
+    
+    // Balance Status
+    string balanceStatus = inBalance ? "⚖️ IN BALANCE" : brokeIBHigh ? "🔼 BROKE HIGH" : brokeIBLow ? "🔽 BROKE LOW" : "📊 RANGING"
+    color balanceColor = inBalance ? color.gray : brokeIBHigh ? color.green : brokeIBLow ? color.red : color.yellow
+    table.cell(infoTable, 0, 6, "Status", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 6, balanceStatus, text_color=balanceColor, text_size=size.tiny)
+    
+    // Volume Status
+    string volStatus = isHighVolume ? "✓ HIGH" : "○ Normal"
+    table.cell(infoTable, 0, 7, "Volume", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 7, volStatus, text_color=isHighVolume ? color.green : color.gray, text_size=size.tiny)
+    
+    // Time info
+    string timeStr = str.format("{0}:{1} - {2}:{3}", 
+        str.tostring(ibStartH), ibStartM < 10 ? "0" + str.tostring(ibStartM) : str.tostring(ibStartM),
+        str.tostring(ibEndH), ibEndM < 10 ? "0" + str.tostring(ibEndM) : str.tostring(ibEndM))
+    table.cell(infoTable, 0, 8, "IB Time", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 8, timeStr + " ET", text_color=color.white, text_size=size.tiny)
+else
+    table.clear(infoTable, 0, 0, 1, 8)
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// ALERTS
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+alertcondition(validBreakoutUp, "IB Breakout Up", "SNIPER IB: Valid breakout above IB High with volume confirmation")
+alertcondition(validBreakoutDown, "IB Breakout Down", "SNIPER IB: Valid breakout below IB Low with volume confirmation")
+alertcondition(retestIBHighBullish, "IB Retest Long", "SNIPER IB: Bullish retest of IB High - potential long entry")
+alertcondition(retestIBLowBearish, "IB Retest Short", "SNIPER IB: Bearish retest of IB Low - potential short entry")
+alertcondition(fakeoutUp or fakeoutDown, "Fakeout Warning", "SNIPER IB: Potential fakeout detected - exercise caution")
+alertcondition(ibComplete and not ibComplete[1], "IB Complete", "SNIPER IB: Initial Balance period complete")
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// END OF SNIPER INITIAL BALANCE V1
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════

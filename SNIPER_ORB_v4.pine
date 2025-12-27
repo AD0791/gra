@@ -1,0 +1,883 @@
+//@version=6
+indicator("SNIPER ORB V4", shorttitle="SNIPER ORB V4", overlay=true, max_lines_count=500, max_boxes_count=500, max_labels_count=500)
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// SNIPER ORB V4 - ENHANCED WITH CONFIRMATION PATTERNS
+// 
+// IMPROVEMENTS FROM V3:
+// - Added breakout confirmation signals with volume + body analysis
+// - Retest pattern detection with engulfing candle confirmation
+// - FVG (Fair Value Gap) detection for optimal entry zones
+// - Anti-fakeout filtering with momentum validation
+// - Color-coded confirmation candles
+// - Delta-like analysis using close vs open comparison
+// - Institutional absorption detection via wick analysis
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// INPUTS
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Session Selection
+sessionType = input.string("New York", "Active Session", options=["London", "New York"], group="Session Settings")
+
+// ORB Display Toggles
+show5minORB = input.bool(true, "Show 5min ORB", group="ORB Display", inline="orb_tog")
+show15minORB = input.bool(true, "Show 15min ORB", group="ORB Display", inline="orb_tog")
+show30minORB = input.bool(true, "Show 30min ORB", group="ORB Display", inline="orb_tog")
+
+// Target Configuration
+numTargets = input.int(3, "Number of Targets", minval=1, maxval=10, group="Target Settings")
+targetPct = input.float(50.0, "Target % of 30min Range", minval=10, maxval=200, group="Target Settings") * 0.01
+
+// ORB Line Colors
+color5minColor = input.color(color.new(#2196F3, 0), "5min ORB", inline="orb5", group="ORB Colors")
+line5minWidth = input.int(3, "", minval=1, maxval=5, inline="orb5", group="ORB Colors")
+
+color15minColor = input.color(color.new(#00BCD4, 0), "15min ORB", inline="orb15", group="ORB Colors")
+line15minWidth = input.int(2, "", minval=1, maxval=5, inline="orb15", group="ORB Colors")
+
+color30minColor = input.color(color.new(#9C27B0, 0), "30min ORB", inline="orb30", group="ORB Colors")
+line30minWidth = input.int(2, "", minval=1, maxval=5, inline="orb30", group="ORB Colors")
+
+// Target Line Colors
+colorTargetUp = input.color(color.new(#4CAF50, 0), "Upside Targets", inline="tgt", group="Target Colors")
+colorTargetDown = input.color(color.new(#F44336, 0), "Downside Targets", inline="tgt", group="Target Colors")
+targetLineWidth = input.int(1, "Width", minval=1, maxval=3, inline="tgt", group="Target Colors")
+
+// VWAP Settings
+showVWAP = input.bool(true, "Show Anchored VWAP", group="VWAP Settings")
+vwapColor = input.color(color.new(#FFC107, 0), "VWAP Color", group="VWAP Settings")
+vwapWidth = input.int(2, "VWAP Width", minval=1, maxval=5, group="VWAP Settings")
+
+// === NEW V4: CONFIRMATION SETTINGS ===
+grpConfirm = "Confirmation Settings"
+showConfirmationSignals = input.bool(true, "Show Breakout Confirmation Signals", group=grpConfirm)
+showRetestSignals = input.bool(true, "Show Retest Entry Signals", group=grpConfirm)
+showFVGZones = input.bool(true, "Show FVG Zones for Entry", group=grpConfirm)
+highlightConfirmCandles = input.bool(true, "Highlight Confirmation Candles", group=grpConfirm)
+
+minVolumeMultiplier = input.float(1.3, "Min Volume Multiplier", minval=1.0, maxval=3.0, step=0.1, group=grpConfirm,
+    tooltip="Breakout volume must be this times the average")
+minBodyPercent = input.float(60.0, "Min Body % for Confirmation", minval=40, maxval=85, step=5, group=grpConfirm,
+    tooltip="Candle body must be this % of total range")
+fvgMinSize = input.float(0.3, "FVG Min Size (% of ORB)", minval=0.1, maxval=1.0, step=0.1, group=grpConfirm,
+    tooltip="Minimum FVG size as percentage of 30min ORB range")
+
+// Confirmation Colors
+colorBullishConfirm = input.color(color.new(#00E676, 0), "Bullish Confirm", group="Confirmation Colors")
+colorBearishConfirm = input.color(color.new(#FF5252, 0), "Bearish Confirm", group="Confirmation Colors")
+colorFVGBullish = input.color(color.new(#00E676, 85), "Bullish FVG Zone", group="Confirmation Colors")
+colorFVGBearish = input.color(color.new(#FF5252, 85), "Bearish FVG Zone", group="Confirmation Colors")
+
+// Text Size
+txtSize = input.string("Small", "Label Size", options=["Tiny","Small","Normal","Large"], group="Display Settings")
+txtSizeFormat = txtSize == "Tiny" ? size.tiny : txtSize == "Small" ? size.small : txtSize == "Normal" ? size.normal : size.large
+
+// Label Overlap Tolerance
+labelTolerance = input.float(2.0, "Label Overlap Tolerance (ticks)", minval=0.5, maxval=10, group="Display Settings")
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// SESSION DETECTION
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+string tz = "America/New_York"
+
+// London: 3:00 AM - 9:30 AM ET
+string londonSpec = "0300-0930:23456"
+bool inLondon = not na(time(timeframe.period, londonSpec, tz))
+bool londonStart = inLondon and not inLondon[1]
+bool londonEnd = inLondon[1] and not inLondon
+
+// New York: 9:30 AM - 5:00 PM ET
+string nySpec = "0930-1700:23456"
+bool inNY = not na(time(timeframe.period, nySpec, tz))
+bool nyStart = inNY and not inNY[1]
+bool nyEnd = inNY[1] and not inNY
+
+// Active session based on user selection
+bool isActiveSession = sessionType == "London" ? inLondon : inNY
+bool isSessionStart = sessionType == "London" ? londonStart : nyStart
+bool isSessionEnd = sessionType == "London" ? londonEnd : nyEnd
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// ORB STATE VARIABLES
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// 5-minute ORB
+var float orb5High = na
+var float orb5Low = na
+var bool orb5Complete = false
+var int orb5StartBar = na
+
+// 15-minute ORB
+var float orb15High = na
+var float orb15Low = na
+var bool orb15Complete = false
+var int orb15StartBar = na
+
+// 30-minute ORB
+var float orb30High = na
+var float orb30Low = na
+var bool orb30Complete = false
+var int orb30StartBar = na
+var float orb30Range = na
+var float orb30Mid = na
+
+// Session tracking
+var int sessionStartBar = na
+
+// Line objects for ORBs
+var line line5High = na
+var line line5Low = na
+var line line15High = na
+var line line15Low = na
+var line line30High = na
+var line line30Low = na
+
+// SMART LABEL SYSTEM
+var label labelHighCombined = na
+var label labelLowCombined = na
+
+// Target arrays
+var array<line> upTargetLines = array.new<line>()
+var array<line> downTargetLines = array.new<line>()
+var array<label> upTargetLabels = array.new<label>()
+var array<label> downTargetLabels = array.new<label>()
+
+// === NEW V4: Breakout Tracking ===
+var bool broke30High = false
+var bool broke30Low = false
+var int breakoutBar = na
+var float breakoutPrice = na
+
+// FVG Tracking
+var array<box> fvgBoxes = array.new<box>()
+var array<float> fvgHighs = array.new<float>()
+var array<float> fvgLows = array.new<float>()
+var array<bool> fvgBullish = array.new<bool>()
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// VOLUME ANALYSIS
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+float avgVolume = ta.sma(volume, 20)
+bool isHighVolume = volume >= avgVolume * minVolumeMultiplier
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// CANDLE ANALYSIS FUNCTIONS
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Calculate candle metrics
+getCandleMetrics() =>
+    float candleRange = high - low
+    float bodySize = math.abs(close - open)
+    float upperWick = high - math.max(close, open)
+    float lowerWick = math.min(close, open) - low
+    float bodyPct = candleRange > 0 ? (bodySize / candleRange) * 100 : 0
+    float upperWickPct = candleRange > 0 ? (upperWick / candleRange) * 100 : 0
+    float lowerWickPct = candleRange > 0 ? (lowerWick / candleRange) * 100 : 0
+    [bodyPct, upperWickPct, lowerWickPct, bodySize, candleRange]
+
+[bodyPercent, upperWickPct, lowerWickPct, bodySize, candleRange] = getCandleMetrics()
+
+// Check if candle is bullish with strong body and minimal upper wick
+isBullishMomentum() =>
+    bool isBullish = close > open
+    bool strongBody = bodyPercent >= minBodyPercent
+    bool minimalUpperWick = upperWickPct <= 25  // No major rejection at top
+    isBullish and strongBody and minimalUpperWick
+
+// Check if candle is bearish with strong body and minimal lower wick
+isBearishMomentum() =>
+    bool isBearish = close < open
+    bool strongBody = bodyPercent >= minBodyPercent
+    bool minimalLowerWick = lowerWickPct <= 25  // No major rejection at bottom
+    isBearish and strongBody and minimalLowerWick
+
+// Bullish engulfing pattern for retest entries
+isBullishEngulfing() =>
+    bool prevBearish = close[1] < open[1]
+    bool currBullish = close > open
+    bool engulfsBody = close > open[1] and open <= close[1]
+    bool strongCurrent = bodyPercent >= 50
+    prevBearish and currBullish and engulfsBody and strongCurrent
+
+// Bearish engulfing pattern for retest entries
+isBearishEngulfing() =>
+    bool prevBullish = close[1] > open[1]
+    bool currBearish = close < open
+    bool engulfsBody = close < open[1] and open >= close[1]
+    bool strongCurrent = bodyPercent >= 50
+    prevBullish and currBearish and engulfsBody and strongCurrent
+
+// Hammer pattern (for bullish reversals at support)
+isHammer() =>
+    bool smallBody = bodyPercent <= 40
+    bool longLowerWick = lowerWickPct >= 50
+    bool tinyUpperWick = upperWickPct <= 15
+    smallBody and longLowerWick and tinyUpperWick
+
+// Shooting star (for bearish reversals at resistance)
+isShootingStar() =>
+    bool smallBody = bodyPercent <= 40
+    bool longUpperWick = upperWickPct >= 50
+    bool tinyLowerWick = lowerWickPct <= 15
+    smallBody and longUpperWick and tinyLowerWick
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// FVG (FAIR VALUE GAP) DETECTION
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Bullish FVG: Gap between candle[2] high and candle[0] low
+detectBullishFVG() =>
+    float gapSize = low - high[2]
+    bool hasGap = gapSize > 0
+    bool significantGap = not na(orb30Range) and orb30Range > 0 and gapSize >= orb30Range * fvgMinSize
+    bool isBullishMove = close > close[2]
+    [hasGap and significantGap and isBullishMove, high[2], low]
+
+// Bearish FVG: Gap between candle[0] high and candle[2] low
+detectBearishFVG() =>
+    float gapSize = low[2] - high
+    bool hasGap = gapSize > 0
+    bool significantGap = not na(orb30Range) and orb30Range > 0 and gapSize >= orb30Range * fvgMinSize
+    bool isBearishMove = close < close[2]
+    [hasGap and significantGap and isBearishMove, high, low[2]]
+
+[hasBullishFVG, bullFVGLow, bullFVGHigh] = detectBullishFVG()
+[hasBearishFVG, bearFVGHigh, bearFVGLow] = detectBearishFVG()
+
+// Track FVGs during session
+if isActiveSession and orb30Complete and showFVGZones
+    // Create bullish FVG box
+    if hasBullishFVG
+        box fvgBox = box.new(bar_index - 2, bullFVGHigh, bar_index + 20, bullFVGLow, 
+                             border_color=color.new(colorFVGBullish, 50), bgcolor=colorFVGBullish)
+        array.push(fvgBoxes, fvgBox)
+        array.push(fvgHighs, bullFVGHigh)
+        array.push(fvgLows, bullFVGLow)
+        array.push(fvgBullish, true)
+    
+    // Create bearish FVG box
+    if hasBearishFVG
+        box fvgBox = box.new(bar_index - 2, bearFVGHigh, bar_index + 20, bearFVGLow, 
+                             border_color=color.new(colorFVGBearish, 50), bgcolor=colorFVGBearish)
+        array.push(fvgBoxes, fvgBox)
+        array.push(fvgHighs, bearFVGHigh)
+        array.push(fvgLows, bearFVGLow)
+        array.push(fvgBullish, false)
+
+// Check if price is touching an FVG zone (for retest entries)
+isTouchingBullishFVG() =>
+    bool touching = false
+    if array.size(fvgBoxes) > 0
+        for i = 0 to array.size(fvgBoxes) - 1
+            if array.get(fvgBullish, i) == true
+                float fvgH = array.get(fvgHighs, i)
+                float fvgL = array.get(fvgLows, i)
+                if low <= fvgH and high >= fvgL
+                    touching := true
+                    break
+    touching
+
+isTouchingBearishFVG() =>
+    bool touching = false
+    if array.size(fvgBoxes) > 0
+        for i = 0 to array.size(fvgBoxes) - 1
+            if array.get(fvgBullish, i) == false
+                float fvgH = array.get(fvgHighs, i)
+                float fvgL = array.get(fvgLows, i)
+                if low <= fvgH and high >= fvgL
+                    touching := true
+                    break
+    touching
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// ANCHORED VWAP CALCULATION
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+var float vwapSum = 0.0
+var float volumeSum = 0.0
+
+int currentHour = hour(time, tz)
+int currentMinute = minute(time, tz)
+
+bool isNYStartCandle = sessionType == "New York" and currentHour == 9 and currentMinute == 30 and not (hour(time[1], tz) == 9 and minute(time[1], tz) == 30)
+bool isLondonStartCandle = sessionType == "London" and currentHour == 3 and currentMinute == 0 and not (hour(time[1], tz) == 3 and minute(time[1], tz) == 0)
+bool isVWAPAnchorCandle = isNYStartCandle or isLondonStartCandle
+
+if isVWAPAnchorCandle
+    vwapSum := 0.0
+    volumeSum := 0.0
+
+if isActiveSession
+    float typicalPrice = hlc3
+    vwapSum += typicalPrice * volume
+    volumeSum += volume
+
+float vwap = volumeSum > 0 ? vwapSum / volumeSum : na
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// SMART LABEL STACKING FUNCTIONS
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+tolerancePrice = labelTolerance * syminfo.mintick
+
+buildHighLabel() =>
+    string labelText = ""
+    color labelColor = color.white
+    float labelPrice = na
+    
+    float h5 = show5minORB and not na(orb5High) ? orb5High : na
+    float h15 = show15minORB and not na(orb15High) ? orb15High : na
+    float h30 = show30minORB and not na(orb30High) ? orb30High : na
+    
+    float maxHigh = na
+    if not na(h5)
+        maxHigh := h5
+    if not na(h15)
+        maxHigh := na(maxHigh) ? h15 : math.max(maxHigh, h15)
+    if not na(h30)
+        maxHigh := na(maxHigh) ? h30 : math.max(maxHigh, h30)
+    
+    labelPrice := maxHigh
+    
+    if not na(maxHigh)
+        if not na(h5) and math.abs(h5 - maxHigh) <= tolerancePrice
+            labelText := "5m H"
+            labelColor := color5minColor
+        
+        if not na(h15) and math.abs(h15 - maxHigh) <= tolerancePrice
+            labelText := str.length(labelText) > 0 ? labelText + ", 15m H" : "15m H"
+            if str.length(labelText) == 5
+                labelColor := color15minColor
+        
+        if not na(h30) and math.abs(h30 - maxHigh) <= tolerancePrice
+            labelText := str.length(labelText) > 0 ? labelText + ", 30m H" : "30m H"
+            if str.length(labelText) == 5
+                labelColor := color30minColor
+    
+    [labelText, labelColor, labelPrice]
+
+buildLowLabel() =>
+    string labelText = ""
+    color labelColor = color.white
+    float labelPrice = na
+    
+    float l5 = show5minORB and not na(orb5Low) ? orb5Low : na
+    float l15 = show15minORB and not na(orb15Low) ? orb15Low : na
+    float l30 = show30minORB and not na(orb30Low) ? orb30Low : na
+    
+    float minLow = na
+    if not na(l5)
+        minLow := l5
+    if not na(l15)
+        minLow := na(minLow) ? l15 : math.min(minLow, l15)
+    if not na(l30)
+        minLow := na(minLow) ? l30 : math.min(minLow, l30)
+    
+    labelPrice := minLow
+    
+    if not na(minLow)
+        if not na(l5) and math.abs(l5 - minLow) <= tolerancePrice
+            labelText := "5m L"
+            labelColor := color5minColor
+        
+        if not na(l15) and math.abs(l15 - minLow) <= tolerancePrice
+            labelText := str.length(labelText) > 0 ? labelText + ", 15m L" : "15m L"
+            if str.length(labelText) == 4
+                labelColor := color15minColor
+        
+        if not na(l30) and math.abs(l30 - minLow) <= tolerancePrice
+            labelText := str.length(labelText) > 0 ? labelText + ", 30m L" : "30m L"
+            if str.length(labelText) == 5
+                labelColor := color30minColor
+    
+    [labelText, labelColor, labelPrice]
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// ORB FORMATION LOGIC
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+if isSessionStart
+    sessionStartBar := bar_index
+    
+    // Reset 5min ORB
+    orb5High := high
+    orb5Low := low
+    orb5Complete := false
+    orb5StartBar := bar_index
+    
+    // Reset 15min ORB
+    orb15High := high
+    orb15Low := low
+    orb15Complete := false
+    orb15StartBar := bar_index
+    
+    // Reset 30min ORB
+    orb30High := high
+    orb30Low := low
+    orb30Complete := false
+    orb30StartBar := bar_index
+    orb30Range := na
+    orb30Mid := na
+    
+    // Reset breakout tracking
+    broke30High := false
+    broke30Low := false
+    breakoutBar := na
+    breakoutPrice := na
+    
+    // Delete previous session lines
+    if not na(line5High)
+        line.delete(line5High)
+        line.delete(line5Low)
+        line.delete(line15High)
+        line.delete(line15Low)
+        line.delete(line30High)
+        line.delete(line30Low)
+    
+    if not na(labelHighCombined)
+        label.delete(labelHighCombined)
+        labelHighCombined := na
+    if not na(labelLowCombined)
+        label.delete(labelLowCombined)
+        labelLowCombined := na
+    
+    line5High := na
+    line5Low := na
+    line15High := na
+    line15Low := na
+    line30High := na
+    line30Low := na
+    
+    // Delete target lines and labels
+    for tline in upTargetLines
+        line.delete(tline)
+    for tline in downTargetLines
+        line.delete(tline)
+    for tlabel in upTargetLabels
+        label.delete(tlabel)
+    for tlabel in downTargetLabels
+        label.delete(tlabel)
+    
+    array.clear(upTargetLines)
+    array.clear(downTargetLines)
+    array.clear(upTargetLabels)
+    array.clear(downTargetLabels)
+    
+    // Clear FVG boxes
+    for fvgBox in fvgBoxes
+        box.delete(fvgBox)
+    array.clear(fvgBoxes)
+    array.clear(fvgHighs)
+    array.clear(fvgLows)
+    array.clear(fvgBullish)
+
+// Timeframe-aware bar calculation
+float tfMinutes = timeframe.in_seconds() / 60
+
+// Update ORBs during formation
+if isActiveSession
+    // 5-minute ORB formation
+    if not orb5Complete
+        if high > orb5High
+            orb5High := high
+        if low < orb5Low
+            orb5Low := low
+        
+        int bars5min = int(5 / tfMinutes)
+        if bar_index >= orb5StartBar + bars5min
+            orb5Complete := true
+    
+    // 15-minute ORB formation
+    if not orb15Complete
+        if high > orb15High
+            orb15High := high
+        if low < orb15Low
+            orb15Low := low
+        
+        int bars15min = int(15 / tfMinutes)
+        if bar_index >= orb15StartBar + bars15min
+            orb15Complete := true
+    
+    // 30-minute ORB formation
+    if not orb30Complete
+        if high > orb30High
+            orb30High := high
+        if low < orb30Low
+            orb30Low := low
+        
+        int bars30min = int(30 / tfMinutes)
+        if bar_index >= orb30StartBar + bars30min
+            orb30Complete := true
+            orb30Range := orb30High - orb30Low
+            orb30Mid := (orb30High + orb30Low) / 2
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// BREAKOUT DETECTION WITH CONFIRMATION
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Valid breakout above 30min ORB High
+bool validBreakoutUp = orb30Complete and 
+                       isActiveSession and
+                       not broke30High and
+                       close > orb30High and
+                       close[1] <= orb30High and
+                       isHighVolume and
+                       isBullishMomentum()
+
+// Valid breakout below 30min ORB Low
+bool validBreakoutDown = orb30Complete and 
+                         isActiveSession and
+                         not broke30Low and
+                         close < orb30Low and
+                         close[1] >= orb30Low and
+                         isHighVolume and
+                         isBearishMomentum()
+
+// Track breakouts
+if validBreakoutUp
+    broke30High := true
+    breakoutBar := bar_index
+    breakoutPrice := close
+
+if validBreakoutDown
+    broke30Low := true
+    breakoutBar := bar_index
+    breakoutPrice := close
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// RETEST ENTRY SIGNALS
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Retest of 30min High after breakout (bullish continuation)
+bool retestHighBullish = broke30High and 
+                         bar_index > breakoutBar + 1 and
+                         low <= orb30High and 
+                         low >= orb30High - (orb30Range * 0.15) and
+                         close > orb30High and
+                         (isBullishEngulfing() or (isBullishMomentum() and isTouchingBullishFVG()))
+
+// Retest of 30min Low after breakout (bearish continuation)
+bool retestLowBearish = broke30Low and 
+                        bar_index > breakoutBar + 1 and
+                        high >= orb30Low and 
+                        high <= orb30Low + (orb30Range * 0.15) and
+                        close < orb30Low and
+                        (isBearishEngulfing() or (isBearishMomentum() and isTouchingBearishFVG()))
+
+// FVG + Engulfing combo entries (highest probability)
+bool fvgBullishEntry = isTouchingBullishFVG() and isBullishEngulfing() and close > orb30Low
+bool fvgBearishEntry = isTouchingBearishFVG() and isBearishEngulfing() and close < orb30High
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// FAKEOUT DETECTION
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Fakeout warning: broke level but reversed back into range
+bool fakeoutUpWarning = broke30High and 
+                        bar_index > breakoutBar and
+                        close < orb30Mid and
+                        isBearishMomentum()
+
+bool fakeoutDownWarning = broke30Low and 
+                          bar_index > breakoutBar and
+                          close > orb30Mid and
+                          isBullishMomentum()
+
+// Absorption detection (long wicks at levels = institutional absorption)
+bool absorptionAtHigh = orb30Complete and 
+                        high >= orb30High - (orb30Range * 0.05) and
+                        isShootingStar() and
+                        isHighVolume
+
+bool absorptionAtLow = orb30Complete and 
+                       low <= orb30Low + (orb30Range * 0.05) and
+                       isHammer() and
+                       isHighVolume
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// DRAW ORB LINES
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+if isActiveSession and not na(orb5High)
+    // 5-MIN ORB LINES
+    if show5minORB
+        if na(line5High)
+            line5High := line.new(orb5StartBar, orb5High, bar_index, orb5High, color=color5minColor, width=line5minWidth)
+            line5Low := line.new(orb5StartBar, orb5Low, bar_index, orb5Low, color=color5minColor, width=line5minWidth)
+        else
+            line.set_y1(line5High, orb5High)
+            line.set_y2(line5High, orb5High)
+            line.set_x2(line5High, bar_index)
+            line.set_y1(line5Low, orb5Low)
+            line.set_y2(line5Low, orb5Low)
+            line.set_x2(line5Low, bar_index)
+    else
+        if not na(line5High)
+            line.delete(line5High)
+            line.delete(line5Low)
+            line5High := na
+            line5Low := na
+    
+    // 15-MIN ORB LINES
+    if show15minORB
+        if na(line15High)
+            line15High := line.new(orb15StartBar, orb15High, bar_index, orb15High, color=color15minColor, width=line15minWidth)
+            line15Low := line.new(orb15StartBar, orb15Low, bar_index, orb15Low, color=color15minColor, width=line15minWidth)
+        else
+            line.set_y1(line15High, orb15High)
+            line.set_y2(line15High, orb15High)
+            line.set_x2(line15High, bar_index)
+            line.set_y1(line15Low, orb15Low)
+            line.set_y2(line15Low, orb15Low)
+            line.set_x2(line15Low, bar_index)
+    else
+        if not na(line15High)
+            line.delete(line15High)
+            line.delete(line15Low)
+            line15High := na
+            line15Low := na
+    
+    // 30-MIN ORB LINES
+    if show30minORB
+        if na(line30High)
+            line30High := line.new(orb30StartBar, orb30High, bar_index, orb30High, color=color30minColor, width=line30minWidth)
+            line30Low := line.new(orb30StartBar, orb30Low, bar_index, orb30Low, color=color30minColor, width=line30minWidth)
+        else
+            line.set_y1(line30High, orb30High)
+            line.set_y2(line30High, orb30High)
+            line.set_x2(line30High, bar_index)
+            line.set_y1(line30Low, orb30Low)
+            line.set_y2(line30Low, orb30Low)
+            line.set_x2(line30Low, bar_index)
+    else
+        if not na(line30High)
+            line.delete(line30High)
+            line.delete(line30Low)
+            line30High := na
+            line30Low := na
+    
+    // SMART COMBINED LABELS
+    if not na(labelHighCombined)
+        label.delete(labelHighCombined)
+        labelHighCombined := na
+    if not na(labelLowCombined)
+        label.delete(labelLowCombined)
+        labelLowCombined := na
+    
+    [highText, highColor, highPrice] = buildHighLabel()
+    if str.length(highText) > 0 and not na(highPrice)
+        labelHighCombined := label.new(bar_index, highPrice, highText, 
+                                       style=label.style_label_left, 
+                                       color=color.new(color.black, 100), 
+                                       textcolor=highColor, 
+                                       size=txtSizeFormat)
+    
+    [lowText, lowColor, lowPrice] = buildLowLabel()
+    if str.length(lowText) > 0 and not na(lowPrice)
+        labelLowCombined := label.new(bar_index, lowPrice, lowText, 
+                                      style=label.style_label_left, 
+                                      color=color.new(color.black, 100), 
+                                      textcolor=lowColor, 
+                                      size=txtSizeFormat)
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// TARGET GENERATION
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+if orb30Complete and array.size(upTargetLines) == 0
+    float orbRange = orb30High - orb30Low
+    
+    for i = 1 to numTargets
+        float targetPrice = orb30High + (orbRange * targetPct * i)
+        line tline = line.new(bar_index, targetPrice, bar_index, targetPrice, 
+                              color=colorTargetUp, width=targetLineWidth, style=line.style_dashed)
+        label tlabel = label.new(bar_index, targetPrice, str.tostring(i) + "x", 
+                                 style=label.style_label_left, color=color.new(color.black, 100), 
+                                 textcolor=colorTargetUp, size=txtSizeFormat)
+        array.push(upTargetLines, tline)
+        array.push(upTargetLabels, tlabel)
+    
+    for i = 1 to numTargets
+        float targetPrice = orb30Low - (orbRange * targetPct * i)
+        line tline = line.new(bar_index, targetPrice, bar_index, targetPrice, 
+                              color=colorTargetDown, width=targetLineWidth, style=line.style_dashed)
+        label tlabel = label.new(bar_index, targetPrice, str.tostring(i) + "x", 
+                                 style=label.style_label_left, color=color.new(color.black, 100), 
+                                 textcolor=colorTargetDown, size=txtSizeFormat)
+        array.push(downTargetLines, tline)
+        array.push(downTargetLabels, tlabel)
+
+if isActiveSession and orb30Complete
+    for tline in upTargetLines
+        line.set_x2(tline, bar_index)
+    for tlabel in upTargetLabels
+        label.set_x(tlabel, bar_index)
+    
+    for tline in downTargetLines
+        line.set_x2(tline, bar_index)
+    for tlabel in downTargetLabels
+        label.set_x(tlabel, bar_index)
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// SESSION END CLEANUP
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+if isSessionEnd
+    if not na(line5High)
+        line.delete(line5High)
+        line.delete(line5Low)
+        line5High := na
+        line5Low := na
+    
+    if not na(line15High)
+        line.delete(line15High)
+        line.delete(line15Low)
+        line15High := na
+        line15Low := na
+    
+    if not na(line30High)
+        line.delete(line30High)
+        line.delete(line30Low)
+        line30High := na
+        line30Low := na
+    
+    if not na(labelHighCombined)
+        label.delete(labelHighCombined)
+        labelHighCombined := na
+    if not na(labelLowCombined)
+        label.delete(labelLowCombined)
+        labelLowCombined := na
+    
+    for tline in upTargetLines
+        line.delete(tline)
+    for tline in downTargetLines
+        line.delete(tline)
+    for tlabel in upTargetLabels
+        label.delete(tlabel)
+    for tlabel in downTargetLabels
+        label.delete(tlabel)
+    
+    array.clear(upTargetLines)
+    array.clear(downTargetLines)
+    array.clear(upTargetLabels)
+    array.clear(downTargetLabels)
+    
+    // Clean up FVG boxes
+    for fvgBox in fvgBoxes
+        box.delete(fvgBox)
+    array.clear(fvgBoxes)
+    array.clear(fvgHighs)
+    array.clear(fvgLows)
+    array.clear(fvgBullish)
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// PLOT SIGNALS
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Confirmed breakout signals
+plotshape(showConfirmationSignals and validBreakoutUp, "Breakout Up", shape.triangleup, location.belowbar, 
+          colorBullishConfirm, size=size.normal, text="ORB↑", textcolor=colorBullishConfirm)
+plotshape(showConfirmationSignals and validBreakoutDown, "Breakout Down", shape.triangledown, location.abovebar, 
+          colorBearishConfirm, size=size.normal, text="ORB↓", textcolor=colorBearishConfirm)
+
+// Retest entry signals (higher probability)
+plotshape(showRetestSignals and retestHighBullish, "Retest Long", shape.labelup, location.belowbar, 
+          color.new(colorBullishConfirm, 0), size=size.small, text="RT↑", textcolor=color.white)
+plotshape(showRetestSignals and retestLowBearish, "Retest Short", shape.labeldown, location.abovebar, 
+          color.new(colorBearishConfirm, 0), size=size.small, text="RT↓", textcolor=color.white)
+
+// FVG + Engulfing combo (premium entries)
+plotshape(showRetestSignals and fvgBullishEntry and not retestHighBullish, "FVG Long", shape.diamond, location.belowbar, 
+          color.new(#00BCD4, 0), size=size.tiny, text="FVG↑", textcolor=color.new(#00BCD4, 0))
+plotshape(showRetestSignals and fvgBearishEntry and not retestLowBearish, "FVG Short", shape.diamond, location.abovebar, 
+          color.new(#00BCD4, 0), size=size.tiny, text="FVG↓", textcolor=color.new(#00BCD4, 0))
+
+// Absorption warnings
+plotshape(absorptionAtHigh, "Absorption High", shape.xcross, location.abovebar, 
+          color.new(#FF9800, 0), size=size.tiny, text="ABS", textcolor=color.new(#FF9800, 0))
+plotshape(absorptionAtLow, "Absorption Low", shape.xcross, location.belowbar, 
+          color.new(#FF9800, 0), size=size.tiny, text="ABS", textcolor=color.new(#FF9800, 0))
+
+// Fakeout warnings
+plotshape(fakeoutUpWarning, "Fakeout Up", shape.cross, location.abovebar, 
+          color.new(#F44336, 0), size=size.tiny, text="FK!", textcolor=color.new(#F44336, 0))
+plotshape(fakeoutDownWarning, "Fakeout Down", shape.cross, location.belowbar, 
+          color.new(#F44336, 0), size=size.tiny, text="FK!", textcolor=color.new(#F44336, 0))
+
+// Highlight confirmation candles
+barcolor(highlightConfirmCandles and validBreakoutUp ? colorBullishConfirm : na)
+barcolor(highlightConfirmCandles and validBreakoutDown ? colorBearishConfirm : na)
+barcolor(highlightConfirmCandles and retestHighBullish ? color.new(#00E676, 30) : na)
+barcolor(highlightConfirmCandles and retestLowBearish ? color.new(#FF5252, 30) : na)
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// PLOT VWAP
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+plot(showVWAP and isActiveSession ? vwap : na, "Anchored VWAP", color=vwapColor, linewidth=vwapWidth, style=plot.style_linebr)
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// INFO TABLE
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+var table infoTable = table.new(position.top_right, 2, 9, border_width=1)
+
+if isActiveSession and orb30Complete
+    table.cell(infoTable, 0, 0, "SNIPER ORB V4", text_color=color.white, bgcolor=color.new(#673AB7, 20), text_size=size.small)
+    table.cell(infoTable, 1, 0, sessionType, text_color=color.white, bgcolor=color.new(#673AB7, 20), text_size=size.small)
+    
+    table.cell(infoTable, 0, 1, "5m Range", text_color=color5minColor, text_size=size.tiny)
+    table.cell(infoTable, 1, 1, str.tostring(orb5High - orb5Low, format.mintick), text_color=color.white, text_size=size.tiny)
+    
+    table.cell(infoTable, 0, 2, "15m Range", text_color=color15minColor, text_size=size.tiny)
+    table.cell(infoTable, 1, 2, str.tostring(orb15High - orb15Low, format.mintick), text_color=color.white, text_size=size.tiny)
+    
+    table.cell(infoTable, 0, 3, "30m Range", text_color=color30minColor, text_size=size.tiny)
+    table.cell(infoTable, 1, 3, str.tostring(orb30Range, format.mintick), text_color=color.white, text_size=size.tiny)
+    
+    table.cell(infoTable, 0, 4, "VWAP", text_color=vwapColor, text_size=size.tiny)
+    table.cell(infoTable, 1, 4, str.tostring(vwap, format.mintick), text_color=color.white, text_size=size.tiny)
+    
+    // Breakout status
+    string bkStatus = broke30High ? "🔼 BROKE HIGH" : broke30Low ? "🔽 BROKE LOW" : "📊 IN RANGE"
+    color bkColor = broke30High ? colorBullishConfirm : broke30Low ? colorBearishConfirm : color.yellow
+    table.cell(infoTable, 0, 5, "Status", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 5, bkStatus, text_color=bkColor, text_size=size.tiny)
+    
+    // Volume status
+    string volStatus = isHighVolume ? "✓ HIGH VOL" : "○ Normal"
+    table.cell(infoTable, 0, 6, "Volume", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 6, volStatus, text_color=isHighVolume ? color.green : color.gray, text_size=size.tiny)
+    
+    // Body strength
+    string bodyStatus = bodyPercent >= 70 ? "💪 STRONG" : bodyPercent >= 50 ? "○ Normal" : "⚠️ Weak"
+    table.cell(infoTable, 0, 7, "Body", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 7, bodyStatus, text_color=bodyPercent >= 70 ? color.green : bodyPercent >= 50 ? color.gray : color.orange, text_size=size.tiny)
+    
+    // FVG count
+    table.cell(infoTable, 0, 8, "FVGs", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 8, str.tostring(array.size(fvgBoxes)), text_color=color.white, text_size=size.tiny)
+else
+    table.clear(infoTable, 0, 0, 1, 8)
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// ALERTS
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+alertcondition(validBreakoutUp, "ORB Breakout Up", "SNIPER ORB V4: Confirmed breakout above 30m ORB High")
+alertcondition(validBreakoutDown, "ORB Breakout Down", "SNIPER ORB V4: Confirmed breakout below 30m ORB Low")
+alertcondition(retestHighBullish, "Retest Long Entry", "SNIPER ORB V4: Bullish retest entry at ORB High")
+alertcondition(retestLowBearish, "Retest Short Entry", "SNIPER ORB V4: Bearish retest entry at ORB Low")
+alertcondition(fvgBullishEntry, "FVG Long Entry", "SNIPER ORB V4: FVG + Engulfing bullish entry")
+alertcondition(fvgBearishEntry, "FVG Short Entry", "SNIPER ORB V4: FVG + Engulfing bearish entry")
+alertcondition(absorptionAtHigh or absorptionAtLow, "Absorption Detected", "SNIPER ORB V4: Institutional absorption at ORB level")
+alertcondition(fakeoutUpWarning or fakeoutDownWarning, "Fakeout Warning", "SNIPER ORB V4: Potential fakeout detected")
+alertcondition(orb30Complete and not orb30Complete[1], "ORB Complete", "SNIPER ORB V4: 30-minute ORB formation complete")
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// END OF SNIPER ORB V4
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
