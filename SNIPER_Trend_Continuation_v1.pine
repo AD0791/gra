@@ -1,0 +1,300 @@
+//@version=6
+indicator("SNIPER Trend Continuation V1", shorttitle="TC SNIPER", overlay=true, max_lines_count=100, max_boxes_count=50, max_labels_count=100)
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// SNIPER TREND CONTINUATION V1
+// Based on Fabio Valentini's Auction Market Playbook
+// 
+// CONCEPT: Trade with momentum when market is OUT of balance
+// - Detects displacement/momentum away from prior value
+// - Identifies LVNs (Low Volume Nodes) in the impulse leg for pullback entries
+// - Waits for aggression confirmation at LVN levels
+// - Target: Previous balance POC
+//
+// DESIGNED FOR: New York session, trending/momentum markets
+// AVOID: London open (too many fakeouts per Fabio's rules)
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// INPUTS
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+impulsePeriod       = input.int(20, "Impulse Detection Period", minval=10, maxval=50, group="Impulse Detection")
+impulseATRMult      = input.float(2.0, "Impulse Threshold (ATR×)", minval=1.0, maxval=4.0, step=0.25, group="Impulse Detection")
+momentumBars        = input.int(5, "Momentum Confirmation Bars", minval=3, maxval=10, group="Impulse Detection")
+
+pullbackDepthMin    = input.float(0.236, "Min Pullback (Fib)", minval=0.1, maxval=0.5, step=0.01, group="LVN Zones")
+pullbackDepthMax    = input.float(0.618, "Max Pullback (Fib)", minval=0.3, maxval=0.786, step=0.01, group="LVN Zones")
+
+minVolumeMult       = input.float(1.3, "Min Entry Volume (× Avg)", minval=1.0, maxval=3.0, step=0.1, group="Signal Filters")
+minBodyRatio        = input.float(0.65, "Min Body Ratio", minval=0.4, maxval=0.9, step=0.05, group="Signal Filters")
+requireTrendAlign   = input.bool(true, "Require EMA Alignment", group="Signal Filters")
+
+sessionFilter       = input.string("New York", "Preferred Session", options=["Any", "London", "New York", "London + NY"], group="Session")
+londonStart         = input.session("0300-0500", "London Session", group="Session")
+nyStart             = input.session("0930-1130", "NY Session", group="Session")
+
+showLVNZones        = input.bool(true, "Show LVN Entry Zones", group="Display")
+showPrevPOC         = input.bool(true, "Show Previous POC (Target)", group="Display")
+signalLookback      = input.int(30, "Show Signals: Last N Bars", minval=10, maxval=100, group="Display")
+
+colorLVN            = input.color(color.new(color.yellow, 80), "LVN Zone", group="Colors")
+colorLongSignal     = input.color(color.new(color.lime, 0), "Long Signal", group="Colors")
+colorShortSignal    = input.color(color.new(color.red, 0), "Short Signal", group="Colors")
+colorPOCTarget      = input.color(color.new(color.orange, 20), "POC Target", group="Colors")
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// SESSION DETECTION
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+inLondon = not na(time(timeframe.period, londonStart, "America/New_York"))
+inNY     = not na(time(timeframe.period, nyStart, "America/New_York"))
+
+sessionOK = switch sessionFilter
+    "Any"        => true
+    "London"     => inLondon
+    "New York"   => inNY
+    "London + NY"=> inLondon or inNY
+    => true
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// CORE CALCULATIONS
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+atrVal       = ta.atr(14)
+avgVolume    = ta.sma(volume, 20)
+relVolume    = volume / avgVolume
+emaFast      = ta.ema(close, 9)
+emaSlow      = ta.ema(close, 21)
+prevPOC      = ta.vwap(hlc3)
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// IMPULSE LEG DETECTION
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+bullMomentum = 0
+bearMomentum = 0
+
+for i = 0 to momentumBars - 1
+    if close[i] > open[i]
+        bullMomentum += 1
+    if close[i] < open[i]
+        bearMomentum += 1
+
+hasBullMomentum = bullMomentum >= momentumBars - 1
+hasBearMomentum = bearMomentum >= momentumBars - 1
+
+impulseThreshold = atrVal * impulseATRMult
+
+var bool   inBullImpulse    = false
+var bool   inBearImpulse    = false
+var float  impulseHigh      = na
+var float  impulseLow       = na
+var int    impulseStartBar  = na
+var float  preImpulsePOC    = na
+
+bullImpulseStart = not inBullImpulse and hasBullMomentum and 
+                   (close - ta.lowest(low, momentumBars)) > impulseThreshold and close > emaFast
+bearImpulseStart = not inBearImpulse and hasBearMomentum and 
+                   (ta.highest(high, momentumBars) - close) > impulseThreshold and close < emaFast
+
+if bullImpulseStart
+    inBullImpulse   := true
+    inBearImpulse   := false
+    impulseLow      := ta.lowest(low, momentumBars)
+    impulseHigh     := high
+    impulseStartBar := bar_index
+    preImpulsePOC   := prevPOC[momentumBars]
+
+if bearImpulseStart
+    inBearImpulse   := true
+    inBullImpulse   := false
+    impulseHigh     := ta.highest(high, momentumBars)
+    impulseLow      := low
+    impulseStartBar := bar_index
+    preImpulsePOC   := prevPOC[momentumBars]
+
+if inBullImpulse
+    impulseHigh := math.max(impulseHigh, high)
+if inBearImpulse
+    impulseLow := math.min(impulseLow, low)
+
+impulseRange = impulseHigh - impulseLow
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// LVN PULLBACK ZONES
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+bullPullbackZoneHigh = impulseHigh - (impulseRange * pullbackDepthMin)
+bullPullbackZoneLow  = impulseHigh - (impulseRange * pullbackDepthMax)
+bearPullbackZoneHigh = impulseLow + (impulseRange * pullbackDepthMax)
+bearPullbackZoneLow  = impulseLow + (impulseRange * pullbackDepthMin)
+
+inBullPullbackZone = inBullImpulse and close < bullPullbackZoneHigh and close > bullPullbackZoneLow
+inBearPullbackZone = inBearImpulse and close > bearPullbackZoneLow and close < bearPullbackZoneHigh
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// AGGRESSION DETECTION
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+candleRange  = high - low
+candleBody   = math.abs(close - open)
+bodyRatio    = candleRange > 0 ? candleBody / candleRange : 0
+isBullish    = close > open
+isBearish    = close < open
+
+upperWick    = high - math.max(close, open)
+lowerWick    = math.min(close, open) - low
+upperWickPct = candleRange > 0 ? upperWick / candleRange : 0
+lowerWickPct = candleRange > 0 ? lowerWick / candleRange : 0
+
+hasElevatedVolume = relVolume >= minVolumeMult
+closePosition = candleRange > 0 ? (close - low) / candleRange : 0.5
+strongBullClose = closePosition > 0.7
+strongBearClose = closePosition < 0.3
+
+bullEMAAlign = not requireTrendAlign or (close > emaFast and emaFast > emaSlow)
+bearEMAAlign = not requireTrendAlign or (close < emaFast and emaFast < emaSlow)
+
+bullAggression = 0
+bullAggression += isBullish ? 1 : 0
+bullAggression += bodyRatio >= minBodyRatio ? 1 : 0
+bullAggression += hasElevatedVolume ? 1 : 0
+bullAggression += strongBullClose ? 1 : 0
+bullAggression += lowerWickPct < 0.2 ? 1 : 0
+bullAggression += bullEMAAlign ? 1 : 0
+
+bearAggression = 0
+bearAggression += isBearish ? 1 : 0
+bearAggression += bodyRatio >= minBodyRatio ? 1 : 0
+bearAggression += hasElevatedVolume ? 1 : 0
+bearAggression += strongBearClose ? 1 : 0
+bearAggression += upperWickPct < 0.2 ? 1 : 0
+bearAggression += bearEMAAlign ? 1 : 0
+
+minAggression = 4
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// SIGNAL GENERATION
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+longSignal = inBullImpulse and inBullPullbackZone[1] and bullAggression >= minAggression and sessionOK
+shortSignal = inBearImpulse and inBearPullbackZone[1] and bearAggression >= minAggression and sessionOK
+
+if inBullImpulse and close < bullPullbackZoneLow
+    inBullImpulse := false
+if inBearImpulse and close > bearPullbackZoneHigh
+    inBearImpulse := false
+
+longQuality  = longSignal ? bullAggression : 0
+shortQuality = shortSignal ? bearAggression : 0
+longTier  = longQuality >= 6 ? "S" : longQuality >= 5 ? "A" : "B"
+shortTier = shortQuality >= 6 ? "S" : shortQuality >= 5 ? "A" : "B"
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// VISUALIZATION
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+isRecent = bar_index >= (last_bar_index - signalLookback)
+
+var box bullLVNBox = na
+var box bearLVNBox = na
+
+if showLVNZones and barstate.islast
+    if not na(bullLVNBox)
+        box.delete(bullLVNBox)
+    if not na(bearLVNBox)
+        box.delete(bearLVNBox)
+    
+    if inBullImpulse and not na(impulseStartBar)
+        bullLVNBox := box.new(impulseStartBar, bullPullbackZoneHigh, bar_index + 5, bullPullbackZoneLow,
+                              border_color=color.new(colorLongSignal, 50), bgcolor=colorLVN,
+                              border_width=1, border_style=line.style_dashed)
+    
+    if inBearImpulse and not na(impulseStartBar)
+        bearLVNBox := box.new(impulseStartBar, bearPullbackZoneHigh, bar_index + 5, bearPullbackZoneLow,
+                              border_color=color.new(colorShortSignal, 50), bgcolor=colorLVN,
+                              border_width=1, border_style=line.style_dashed)
+
+var line pocTargetLine = na
+var label pocTargetLabel = na
+
+if showPrevPOC and barstate.islast and (inBullImpulse or inBearImpulse) and not na(preImpulsePOC)
+    if not na(pocTargetLine)
+        line.delete(pocTargetLine)
+    if not na(pocTargetLabel)
+        label.delete(pocTargetLabel)
+    
+    pocTargetLine := line.new(bar_index - 30, preImpulsePOC, bar_index + 10, preImpulsePOC,
+                              color=colorPOCTarget, width=2, style=line.style_solid)
+    pocTargetLabel := label.new(bar_index + 11, preImpulsePOC, "PREV POC TARGET",
+                                color=color.new(color.black, 100), textcolor=colorPOCTarget,
+                                style=label.style_label_left, size=size.small)
+
+if longSignal and isRecent
+    label.new(bar_index, low - atrVal * 0.3, "▲",
+              color=color.new(color.black, 100), textcolor=colorLongSignal,
+              style=label.style_label_up, size=size.normal)
+    label.new(bar_index, low - atrVal * 0.8,
+              "TC↑ " + longTier + "\nVol:" + str.tostring(relVolume, "#.#") + "×",
+              color=colorLongSignal, textcolor=color.white,
+              style=label.style_label_up, size=size.small)
+    line.new(bar_index - 3, bullPullbackZoneLow - atrVal * 0.3, bar_index + 3, bullPullbackZoneLow - atrVal * 0.3,
+             color=color.new(color.red, 30), width=2, style=line.style_dotted)
+
+if shortSignal and isRecent
+    label.new(bar_index, high + atrVal * 0.3, "▼",
+              color=color.new(color.black, 100), textcolor=colorShortSignal,
+              style=label.style_label_down, size=size.normal)
+    label.new(bar_index, high + atrVal * 0.8,
+              "TC↓ " + shortTier + "\nVol:" + str.tostring(relVolume, "#.#") + "×",
+              color=colorShortSignal, textcolor=color.white,
+              style=label.style_label_down, size=size.small)
+    line.new(bar_index - 3, bearPullbackZoneHigh + atrVal * 0.3, bar_index + 3, bearPullbackZoneHigh + atrVal * 0.3,
+             color=color.new(color.red, 30), width=2, style=line.style_dotted)
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// INFO TABLE
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+var table infoTable = table.new(position.top_right, 2, 6, bgcolor=color.new(color.black, 30), frame_width=1)
+
+if barstate.islast
+    trendState = inBullImpulse ? "BULL IMPULSE" : inBearImpulse ? "BEAR IMPULSE" : "NO IMPULSE"
+    trendColor = inBullImpulse ? colorLongSignal : inBearImpulse ? colorShortSignal : color.gray
+    
+    table.cell(infoTable, 0, 0, "TC SNIPER", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 0, "", text_size=size.small)
+    
+    table.cell(infoTable, 0, 1, "State", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 1, trendState, text_color=trendColor, text_size=size.tiny)
+    
+    pullbackStatus = inBullPullbackZone ? "IN ZONE ↑" : inBearPullbackZone ? "IN ZONE ↓" : "WAITING"
+    pullbackColor  = inBullPullbackZone ? colorLongSignal : inBearPullbackZone ? colorShortSignal : color.gray
+    table.cell(infoTable, 0, 2, "Pullback", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 2, pullbackStatus, text_color=pullbackColor, text_size=size.tiny)
+    
+    targetText = not na(preImpulsePOC) ? str.tostring(preImpulsePOC, "#.##") : "—"
+    table.cell(infoTable, 0, 3, "Target", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 3, targetText, text_color=colorPOCTarget, text_size=size.tiny)
+    
+    sessionText = inLondon ? "LONDON ⚠️" : inNY ? "NY ✓" : "—"
+    sessionColor = inNY ? color.lime : inLondon ? color.yellow : color.gray
+    table.cell(infoTable, 0, 4, "Session", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 4, sessionText, text_color=sessionColor, text_size=size.tiny)
+    
+    volText = str.tostring(relVolume, "#.#") + "×"
+    volColor = hasElevatedVolume ? color.lime : color.gray
+    table.cell(infoTable, 0, 5, "Vol", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 5, volText, text_color=volColor, text_size=size.tiny)
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// ALERTS
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+alertcondition(longSignal, title="TC Long Signal", message="SNIPER TC: Long at LVN pullback. Target: Prev POC")
+alertcondition(shortSignal, title="TC Short Signal", message="SNIPER TC: Short at LVN pullback. Target: Prev POC")
+alertcondition(bullImpulseStart, title="Bull Impulse", message="SNIPER TC: Bull impulse - watch for pullback")
+alertcondition(bearImpulseStart, title="Bear Impulse", message="SNIPER TC: Bear impulse - watch for pullback")
+alertcondition(inBullPullbackZone and not inBullPullbackZone[1], title="Bull LVN Zone", message="SNIPER TC: Entering bull LVN")
+alertcondition(inBearPullbackZone and not inBearPullbackZone[1], title="Bear LVN Zone", message="SNIPER TC: Entering bear LVN")

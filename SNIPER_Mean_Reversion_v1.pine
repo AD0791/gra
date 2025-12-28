@@ -1,0 +1,680 @@
+//@version=6
+indicator("SNIPER Mean Reversion V1", shorttitle="MR SNIPER", overlay=true, max_lines_count=100, max_boxes_count=50, max_labels_count=100)
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// SNIPER MEAN REVERSION V1
+// Based on Fabio Valentini's Auction Market Playbook
+// //@version=6
+indicator("SNIPER Mean Reversion V1", shorttitle="MR SNIPER", overlay=true, max_lines_count=100, max_boxes_count=50, max_labels_count=100)
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// SNIPER MEAN REVERSION V1
+// Based on Fabio Valentini's Auction Market Playbook
+// 
+// CONCEPT: Trade failed breakouts back to POC (Point of Control)
+// - Detects when price breaks out of balance but fails to hold
+// - Waits for price to reclaim inside balance (NOT the first move back)
+// - Signals entry on pullback into LVN with aggression confirmation
+// - Target: Balance POC (center of value)
+//
+// DESIGNED FOR: London session, compressed/ranging markets
+// PAIRS WITH: Your existing SNIPER ORB and SNIPER IB indicators
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// INPUTS - CLEAN & MINIMAL
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Core Settings
+balancePeriod       = input.int(50, "Balance Period (bars)", minval=20, maxval=200, group="Balance Detection", 
+                      tooltip="Number of bars to calculate the balance range. Higher = wider range detection")
+pocSmoothing        = input.int(20, "POC Smoothing", minval=5, maxval=50, group="Balance Detection",
+                      tooltip="Smoothing for POC calculation")
+breakoutATRMult     = input.float(1.5, "Breakout Threshold (ATR×)", minval=0.5, maxval=3.0, step=0.1, group="Balance Detection",
+                      tooltip="Price must exceed balance by this ATR multiple to count as breakout")
+
+// Signal Filters
+minVolumeMult       = input.float(1.2, "Min Volume (× Avg)", minval=1.0, maxval=3.0, step=0.1, group="Signal Filters",
+                      tooltip="Volume must be at least this × the 20-bar average")
+minBodyRatio        = input.float(0.6, "Min Body Ratio", minval=0.4, maxval=0.9, step=0.05, group="Signal Filters",
+                      tooltip="Candle body must be at least this % of total range")
+requireEngulfing    = input.bool(true, "Require Engulfing Pattern", group="Signal Filters",
+                      tooltip="Entry candle should engulf previous candle")
+
+// Session Filter
+sessionFilter       = input.string("London", "Preferred Session", options=["Any", "London", "New York", "London + NY"], group="Session",
+                      tooltip="Mean Reversion works best in London or compressed conditions")
+londonStart         = input.session("0300-0500", "London Session", group="Session")
+nyStart             = input.session("0930-1130", "NY Session", group="Session")
+
+// Visual Settings
+showBalanceZone     = input.bool(true, "Show Balance Zone", group="Display")
+showPOC             = input.bool(true, "Show POC Line", group="Display")
+showSignalsOnly     = input.bool(true, "Show Signals Only (minimal clutter)", group="Display",
+                      tooltip="When ON, only shows entry signals and POC target. When OFF, shows additional zone info")
+signalLookback      = input.int(30, "Show Signals: Last N Bars", minval=10, maxval=100, group="Display")
+
+// Colors
+colorBalanceZone    = input.color(color.new(color.gray, 85), "Balance Zone", group="Colors")
+colorPOC            = input.color(color.new(color.orange, 20), "POC Line", group="Colors")
+colorLongSignal     = input.color(color.new(color.teal, 0), "Long Signal", group="Colors")
+colorShortSignal    = input.color(color.new(color.fuchsia, 0), "Short Signal", group="Colors")
+colorFailedBreak    = input.color(color.new(color.red, 50), "Failed Breakout Marker", group="Colors")
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// SESSION DETECTION
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+inLondon = not na(time(timeframe.period, londonStart, "America/New_York"))
+inNY     = not na(time(timeframe.period, nyStart, "America/New_York"))
+
+sessionOK = switch sessionFilter
+    "Any"        => true
+    "London"     => inLondon
+    "New York"   => inNY
+    "London + NY"=> inLondon or inNY
+    => true
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// BALANCE ZONE CALCULATION (Simplified Volume Profile Proxy)
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Calculate balance high/low using a volatility-adjusted range
+atrVal          = ta.atr(14)
+balanceHigh     = ta.highest(high, balancePeriod)
+balanceLow      = ta.lowest(low, balancePeriod)
+balanceRange    = balanceHigh - balanceLow
+
+// POC approximation using VWAP-like calculation over balance period
+typicalPrice    = hlc3
+cumTPV          = math.sum(typicalPrice * volume, pocSmoothing)
+cumVol          = math.sum(volume, pocSmoothing)
+pocLevel        = cumTPV / cumVol
+
+// Value Area approximation (68% of activity = ~1 standard deviation)
+priceStdev      = ta.stdev(close, balancePeriod)
+valueAreaHigh   = pocLevel + priceStdev
+valueAreaLow    = pocLevel - priceStdev
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// BREAKOUT & FAILURE DETECTION
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Define breakout thresholds
+breakoutThreshold = atrVal * breakoutATRMult
+
+// Detect breakout above balance
+brokeAbove       = high > valueAreaHigh + breakoutThreshold
+brokeBelow       = low < valueAreaLow - breakoutThreshold
+
+// Track if we're currently outside balance
+var bool wasAboveBalance = false
+var bool wasBelowBalance = false
+var float breakoutLevel  = na
+var int   breakoutBar    = na
+
+// Update breakout state
+if brokeAbove and not wasAboveBalance
+    wasAboveBalance := true
+    wasBelowBalance := false
+    breakoutLevel   := high
+    breakoutBar     := bar_index
+
+if brokeBelow and not wasBelowBalance
+    wasBelowBalance := true
+    wasAboveBalance := false
+    breakoutLevel   := low
+    breakoutBar     := bar_index
+
+// Detect RECLAIM (price comes back inside balance - this is key!)
+reclaimedFromAbove = wasAboveBalance and close < valueAreaHigh and close > valueAreaLow
+reclaimedFromBelow = wasBelowBalance and close > valueAreaLow and close < valueAreaHigh
+
+// Track reclaim state
+var bool hadReclaimFromAbove = false
+var bool hadReclaimFromBelow = false
+var int  reclaimBar          = na
+
+if reclaimedFromAbove and not hadReclaimFromAbove
+    hadReclaimFromAbove := true
+    reclaimBar          := bar_index
+    wasAboveBalance     := false
+
+if reclaimedFromBelow and not hadReclaimFromBelow
+    hadReclaimFromBelow := true
+    reclaimBar          := bar_index
+    wasBelowBalance     := false
+
+// Reset reclaim flags after signal or timeout
+reclaimTimeout = 20  // bars
+if hadReclaimFromAbove and bar_index - reclaimBar > reclaimTimeout
+    hadReclaimFromAbove := false
+
+if hadReclaimFromBelow and bar_index - reclaimBar > reclaimTimeout
+    hadReclaimFromBelow := false
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// LVN PROXY & PULLBACK DETECTION
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Calculate relative volume
+avgVolume        = ta.sma(volume, 20)
+relativeVolume   = volume / avgVolume
+
+// Pullback detection after reclaim
+pullbackUpAfterReclaim   = hadReclaimFromAbove and close > close[1] and close < valueAreaHigh
+pullbackDownAfterReclaim = hadReclaimFromBelow and close < close[1] and close > valueAreaLow
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// AGGRESSION DETECTION (Order Flow Proxy)
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Candle analysis
+candleRange  = high - low
+candleBody   = math.abs(close - open)
+bodyRatio    = candleRange > 0 ? candleBody / candleRange : 0
+isBullish    = close > open
+isBearish    = close < open
+
+// Upper/lower wick analysis
+upperWick    = high - math.max(close, open)
+lowerWick    = math.min(close, open) - low
+upperWickPct = candleRange > 0 ? upperWick / candleRange : 0
+lowerWickPct = candleRange > 0 ? lowerWick / candleRange : 0
+
+// Volume confirmation
+hasElevatedVolume = relativeVolume >= minVolumeMult
+
+// Engulfing pattern detection
+bullEngulfing = isBullish and close > high[1] and open < low[1]
+bearEngulfing = isBearish and close < low[1] and open > high[1]
+
+// Strong close (closes in upper/lower third of range)
+closePosition = candleRange > 0 ? (close - low) / candleRange : 0.5
+strongBullClose = closePosition > 0.67
+strongBearClose = closePosition < 0.33
+
+// Aggression score (0-5)
+bullAggression = 0
+bullAggression += isBullish ? 1 : 0
+bullAggression += bodyRatio >= minBodyRatio ? 1 : 0
+bullAggression += hasElevatedVolume ? 1 : 0
+bullAggression += strongBullClose ? 1 : 0
+bullAggression += (not requireEngulfing or bullEngulfing) ? 1 : 0
+
+bearAggression = 0
+bearAggression += isBearish ? 1 : 0
+bearAggression += bodyRatio >= minBodyRatio ? 1 : 0
+bearAggression += hasElevatedVolume ? 1 : 0
+bearAggression += strongBearClose ? 1 : 0
+bearAggression += (not requireEngulfing or bearEngulfing) ? 1 : 0
+
+// Minimum aggression threshold for entry
+minAggression = requireEngulfing ? 4 : 3
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// SIGNAL GENERATION
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// LONG SIGNAL: After failed breakout below, reclaimed balance, pullback down, now showing buy aggression
+longSignal = hadReclaimFromBelow and 
+             pullbackDownAfterReclaim[1] and 
+             bullAggression >= minAggression and
+             sessionOK
+
+// SHORT SIGNAL: After failed breakout above, reclaimed balance, pullback up, now showing sell aggression  
+shortSignal = hadReclaimFromAbove and 
+              pullbackUpAfterReclaim[1] and 
+              bearAggression >= minAggression and
+              sessionOK
+
+// Reset reclaim state after signal triggers
+if longSignal
+    hadReclaimFromBelow := false
+
+if shortSignal
+    hadReclaimFromAbove := false
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// SIGNAL QUALITY SCORING
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+longQuality  = longSignal ? bullAggression : 0
+shortQuality = shortSignal ? bearAggression : 0
+
+longTier  = longQuality >= 5 ? "S" : longQuality >= 4 ? "A" : "B"
+shortTier = shortQuality >= 5 ? "S" : shortQuality >= 4 ? "A" : "B"
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// VISUALIZATION - MINIMAL & CLEAN
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+isRecent = bar_index >= (last_bar_index - signalLookback)
+
+// Balance zone (subtle background)
+var box balanceBox = na
+if showBalanceZone and not showSignalsOnly and barstate.islast
+    if not na(balanceBox)
+        box.delete(balanceBox)
+    balanceBox := box.new(bar_index - balancePeriod, valueAreaHigh, bar_index + 5, valueAreaLow, 
+                          border_color=color.new(color.gray, 70), bgcolor=colorBalanceZone,
+                          border_width=1, border_style=line.style_dotted)
+
+// POC Line (TARGET - always visible)
+var line pocLine = na
+var label pocLabel = na
+if showPOC and barstate.islast
+    if not na(pocLine)
+        line.delete(pocLine)
+    if not na(pocLabel)
+        label.delete(pocLabel)
+    pocLine := line.new(bar_index - 50, pocLevel, bar_index + 10, pocLevel,
+                        color=colorPOC, width=2, style=line.style_solid)
+    pocLabel := label.new(bar_index + 11, pocLevel, "POC TARGET", 
+                          color=color.new(color.black, 100), textcolor=colorPOC, 
+                          style=label.style_label_left, size=size.small)
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// ENTRY SIGNALS - CLEAR & PROMINENT
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Long signal marker
+if longSignal and isRecent
+    label.new(bar_index, low - atrVal * 0.3, "▲", 
+              color=color.new(color.black, 100), textcolor=colorLongSignal,
+              style=label.style_label_up, size=size.normal)
+    
+    label.new(bar_index, low - atrVal * 0.8, 
+              "MR↑ " + longTier + "\nVol:" + str.tostring(relativeVolume, "#.#") + "×",
+              color=colorLongSignal, textcolor=color.white,
+              style=label.style_label_up, size=size.small)
+    
+    recentLow = ta.lowest(low, 5)
+    line.new(bar_index - 3, recentLow - atrVal * 0.2, bar_index + 3, recentLow - atrVal * 0.2,
+             color=color.new(color.red, 30), width=2, style=line.style_dotted)
+
+// Short signal marker
+if shortSignal and isRecent
+    label.new(bar_index, high + atrVal * 0.3, "▼",
+              color=color.new(color.black, 100), textcolor=colorShortSignal,
+              style=label.style_label_down, size=size.normal)
+    
+    label.new(bar_index, high + atrVal * 0.8,
+              "MR↓ " + shortTier + "\nVol:" + str.tostring(relativeVolume, "#.#") + "×",
+              color=colorShortSignal, textcolor=color.white,
+              style=label.style_label_down, size=size.small)
+    
+    recentHigh = ta.highest(high, 5)
+    line.new(bar_index - 3, recentHigh + atrVal * 0.2, bar_index + 3, recentHigh + atrVal * 0.2,
+             color=color.new(color.red, 30), width=2, style=line.style_dotted)
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// COMPACT INFO TABLE
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+var table infoTable = table.new(position.top_right, 2, 5, bgcolor=color.new(color.black, 30), frame_width=1)
+
+if barstate.islast
+    marketState = wasAboveBalance ? "ABOVE BAL" : wasBelowBalance ? "BELOW BAL" : "IN BALANCE"
+    stateColor  = wasAboveBalance or wasBelowBalance ? color.yellow : color.lime
+    
+    table.cell(infoTable, 0, 0, "MR SNIPER", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 0, "", text_color=color.white, text_size=size.small)
+    
+    table.cell(infoTable, 0, 1, "State", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 1, marketState, text_color=stateColor, text_size=size.tiny)
+    
+    table.cell(infoTable, 0, 2, "POC", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 2, str.tostring(pocLevel, "#.##"), text_color=colorPOC, text_size=size.tiny)
+    
+    table.cell(infoTable, 0, 3, "Session", text_color=color.gray, text_size=size.tiny)
+    sessionText = inLondon ? "LONDON" : inNY ? "NY" : "—"
+    table.cell(infoTable, 1, 3, sessionText, text_color=sessionOK ? color.lime : color.gray, text_size=size.tiny)
+    
+    reclaimStatus = hadReclaimFromAbove ? "SHORT SETUP" : hadReclaimFromBelow ? "LONG SETUP" : "WAITING"
+    reclaimColor  = hadReclaimFromAbove ? colorShortSignal : hadReclaimFromBelow ? colorLongSignal : color.gray
+    table.cell(infoTable, 0, 4, "Setup", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 4, reclaimStatus, text_color=reclaimColor, text_size=size.tiny)
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// ALERTS
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+alertcondition(longSignal, title="MR Long Signal", message="SNIPER MR: Long signal - Failed breakdown reclaimed. Target: POC")
+alertcondition(shortSignal, title="MR Short Signal", message="SNIPER MR: Short signal - Failed breakout reclaimed. Target: POC")
+alertcondition(reclaimedFromAbove, title="Reclaimed From Above", message="SNIPER MR: Price reclaimed from above - SHORT setup forming")
+alertcondition(reclaimedFromBelow, title="Reclaimed From Below", message="SNIPER MR: Price reclaimed from below - LONG setup forming")
+
+// CONCEPT: Trade failed breakouts back to POC (Point of Control)
+// - Detects when price breaks out of balance but fails to hold
+// - Waits for price to reclaim inside balance (NOT the first move back)
+// - Signals entry on pullback into LVN with aggression confirmation
+// - Target: Balance POC (center of value)
+//
+// DESIGNED FOR: London session, compressed/ranging markets
+// PAIRS WITH: Your existing SNIPER ORB and SNIPER IB indicators
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// INPUTS - CLEAN & MINIMAL
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Core Settings
+balancePeriod       = input.int(50, "Balance Period (bars)", minval=20, maxval=200, group="Balance Detection", 
+                      tooltip="Number of bars to calculate the balance range. Higher = wider range detection")
+pocSmoothing        = input.int(20, "POC Smoothing", minval=5, maxval=50, group="Balance Detection",
+                      tooltip="Smoothing for POC calculation")
+breakoutATRMult     = input.float(1.5, "Breakout Threshold (ATR×)", minval=0.5, maxval=3.0, step=0.1, group="Balance Detection",
+                      tooltip="Price must exceed balance by this ATR multiple to count as breakout")
+
+// Signal Filters
+minVolumeMult       = input.float(1.2, "Min Volume (× Avg)", minval=1.0, maxval=3.0, step=0.1, group="Signal Filters",
+                      tooltip="Volume must be at least this × the 20-bar average")
+minBodyRatio        = input.float(0.6, "Min Body Ratio", minval=0.4, maxval=0.9, step=0.05, group="Signal Filters",
+                      tooltip="Candle body must be at least this % of total range")
+requireEngulfing    = input.bool(true, "Require Engulfing Pattern", group="Signal Filters",
+                      tooltip="Entry candle should engulf previous candle")
+
+// Session Filter
+sessionFilter       = input.string("London", "Preferred Session", options=["Any", "London", "New York", "London + NY"], group="Session",
+                      tooltip="Mean Reversion works best in London or compressed conditions")
+londonStart         = input.session("0300-0500", "London Session", group="Session")
+nyStart             = input.session("0930-1130", "NY Session", group="Session")
+
+// Visual Settings
+showBalanceZone     = input.bool(true, "Show Balance Zone", group="Display")
+showPOC             = input.bool(true, "Show POC Line", group="Display")
+showSignalsOnly     = input.bool(true, "Show Signals Only (minimal clutter)", group="Display",
+                      tooltip="When ON, only shows entry signals and POC target. When OFF, shows additional zone info")
+signalLookback      = input.int(30, "Show Signals: Last N Bars", minval=10, maxval=100, group="Display")
+
+// Colors
+colorBalanceZone    = input.color(color.new(color.gray, 85), "Balance Zone", group="Colors")
+colorPOC            = input.color(color.new(color.orange, 20), "POC Line", group="Colors")
+colorLongSignal     = input.color(color.new(color.teal, 0), "Long Signal", group="Colors")
+colorShortSignal    = input.color(color.new(color.fuchsia, 0), "Short Signal", group="Colors")
+colorFailedBreak    = input.color(color.new(color.red, 50), "Failed Breakout Marker", group="Colors")
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// SESSION DETECTION
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+inLondon = not na(time(timeframe.period, londonStart, "America/New_York"))
+inNY     = not na(time(timeframe.period, nyStart, "America/New_York"))
+
+sessionOK = switch sessionFilter
+    "Any"        => true
+    "London"     => inLondon
+    "New York"   => inNY
+    "London + NY"=> inLondon or inNY
+    => true
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// BALANCE ZONE CALCULATION (Simplified Volume Profile Proxy)
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Calculate balance high/low using a volatility-adjusted range
+atrVal          = ta.atr(14)
+balanceHigh     = ta.highest(high, balancePeriod)
+balanceLow      = ta.lowest(low, balancePeriod)
+balanceRange    = balanceHigh - balanceLow
+
+// POC approximation using VWAP-like calculation over balance period
+typicalPrice    = hlc3
+cumTPV          = math.sum(typicalPrice * volume, pocSmoothing)
+cumVol          = math.sum(volume, pocSmoothing)
+pocLevel        = cumTPV / cumVol
+
+// Value Area approximation (68% of activity = ~1 standard deviation)
+priceStdev      = ta.stdev(close, balancePeriod)
+valueAreaHigh   = pocLevel + priceStdev
+valueAreaLow    = pocLevel - priceStdev
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// BREAKOUT & FAILURE DETECTION
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Define breakout thresholds
+breakoutThreshold = atrVal * breakoutATRMult
+
+// Detect breakout above balance
+brokeAbove       = high > valueAreaHigh + breakoutThreshold
+brokeBelow       = low < valueAreaLow - breakoutThreshold
+
+// Track if we're currently outside balance
+var bool wasAboveBalance = false
+var bool wasBelowBalance = false
+var float breakoutLevel  = na
+var int   breakoutBar    = na
+
+// Update breakout state
+if brokeAbove and not wasAboveBalance
+    wasAboveBalance := true
+    wasBelowBalance := false
+    breakoutLevel   := high
+    breakoutBar     := bar_index
+
+if brokeBelow and not wasBelowBalance
+    wasBelowBalance := true
+    wasAboveBalance := false
+    breakoutLevel   := low
+    breakoutBar     := bar_index
+
+// Detect RECLAIM (price comes back inside balance - this is key!)
+reclaimedFromAbove = wasAboveBalance and close < valueAreaHigh and close > valueAreaLow
+reclaimedFromBelow = wasBelowBalance and close > valueAreaLow and close < valueAreaHigh
+
+// Track reclaim state
+var bool hadReclaimFromAbove = false
+var bool hadReclaimFromBelow = false
+var int  reclaimBar          = na
+
+if reclaimedFromAbove and not hadReclaimFromAbove
+    hadReclaimFromAbove := true
+    reclaimBar          := bar_index
+    wasAboveBalance     := false
+
+if reclaimedFromBelow and not hadReclaimFromBelow
+    hadReclaimFromBelow := true
+    reclaimBar          := bar_index
+    wasBelowBalance     := false
+
+// Reset reclaim flags after signal or timeout
+reclaimTimeout = 20  // bars
+if hadReclaimFromAbove and bar_index - reclaimBar > reclaimTimeout
+    hadReclaimFromAbove := false
+
+if hadReclaimFromBelow and bar_index - reclaimBar > reclaimTimeout
+    hadReclaimFromBelow := false
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// LVN PROXY & PULLBACK DETECTION
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Calculate relative volume
+avgVolume        = ta.sma(volume, 20)
+relativeVolume   = volume / avgVolume
+
+// Pullback detection after reclaim
+pullbackUpAfterReclaim   = hadReclaimFromAbove and close > close[1] and close < valueAreaHigh
+pullbackDownAfterReclaim = hadReclaimFromBelow and close < close[1] and close > valueAreaLow
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// AGGRESSION DETECTION (Order Flow Proxy)
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Candle analysis
+candleRange  = high - low
+candleBody   = math.abs(close - open)
+bodyRatio    = candleRange > 0 ? candleBody / candleRange : 0
+isBullish    = close > open
+isBearish    = close < open
+
+// Upper/lower wick analysis
+upperWick    = high - math.max(close, open)
+lowerWick    = math.min(close, open) - low
+upperWickPct = candleRange > 0 ? upperWick / candleRange : 0
+lowerWickPct = candleRange > 0 ? lowerWick / candleRange : 0
+
+// Volume confirmation
+hasElevatedVolume = relativeVolume >= minVolumeMult
+
+// Engulfing pattern detection
+bullEngulfing = isBullish and close > high[1] and open < low[1]
+bearEngulfing = isBearish and close < low[1] and open > high[1]
+
+// Strong close (closes in upper/lower third of range)
+closePosition = candleRange > 0 ? (close - low) / candleRange : 0.5
+strongBullClose = closePosition > 0.67
+strongBearClose = closePosition < 0.33
+
+// Aggression score (0-5)
+bullAggression = 0
+bullAggression += isBullish ? 1 : 0
+bullAggression += bodyRatio >= minBodyRatio ? 1 : 0
+bullAggression += hasElevatedVolume ? 1 : 0
+bullAggression += strongBullClose ? 1 : 0
+bullAggression += (not requireEngulfing or bullEngulfing) ? 1 : 0
+
+bearAggression = 0
+bearAggression += isBearish ? 1 : 0
+bearAggression += bodyRatio >= minBodyRatio ? 1 : 0
+bearAggression += hasElevatedVolume ? 1 : 0
+bearAggression += strongBearClose ? 1 : 0
+bearAggression += (not requireEngulfing or bearEngulfing) ? 1 : 0
+
+// Minimum aggression threshold for entry
+minAggression = requireEngulfing ? 4 : 3
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// SIGNAL GENERATION
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// LONG SIGNAL: After failed breakout below, reclaimed balance, pullback down, now showing buy aggression
+longSignal = hadReclaimFromBelow and 
+             pullbackDownAfterReclaim[1] and 
+             bullAggression >= minAggression and
+             sessionOK
+
+// SHORT SIGNAL: After failed breakout above, reclaimed balance, pullback up, now showing sell aggression  
+shortSignal = hadReclaimFromAbove and 
+              pullbackUpAfterReclaim[1] and 
+              bearAggression >= minAggression and
+              sessionOK
+
+// Reset reclaim state after signal triggers
+if longSignal
+    hadReclaimFromBelow := false
+
+if shortSignal
+    hadReclaimFromAbove := false
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// SIGNAL QUALITY SCORING
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+longQuality  = longSignal ? bullAggression : 0
+shortQuality = shortSignal ? bearAggression : 0
+
+longTier  = longQuality >= 5 ? "S" : longQuality >= 4 ? "A" : "B"
+shortTier = shortQuality >= 5 ? "S" : shortQuality >= 4 ? "A" : "B"
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// VISUALIZATION - MINIMAL & CLEAN
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+isRecent = bar_index >= (last_bar_index - signalLookback)
+
+// Balance zone (subtle background)
+var box balanceBox = na
+if showBalanceZone and not showSignalsOnly and barstate.islast
+    if not na(balanceBox)
+        box.delete(balanceBox)
+    balanceBox := box.new(bar_index - balancePeriod, valueAreaHigh, bar_index + 5, valueAreaLow, 
+                          border_color=color.new(color.gray, 70), bgcolor=colorBalanceZone,
+                          border_width=1, border_style=line.style_dotted)
+
+// POC Line (TARGET - always visible)
+var line pocLine = na
+var label pocLabel = na
+if showPOC and barstate.islast
+    if not na(pocLine)
+        line.delete(pocLine)
+    if not na(pocLabel)
+        label.delete(pocLabel)
+    pocLine := line.new(bar_index - 50, pocLevel, bar_index + 10, pocLevel,
+                        color=colorPOC, width=2, style=line.style_solid)
+    pocLabel := label.new(bar_index + 11, pocLevel, "POC TARGET", 
+                          color=color.new(color.black, 100), textcolor=colorPOC, 
+                          style=label.style_label_left, size=size.small)
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// ENTRY SIGNALS - CLEAR & PROMINENT
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Long signal marker
+if longSignal and isRecent
+    label.new(bar_index, low - atrVal * 0.3, "▲", 
+              color=color.new(color.black, 100), textcolor=colorLongSignal,
+              style=label.style_label_up, size=size.normal)
+    
+    label.new(bar_index, low - atrVal * 0.8, 
+              "MR↑ " + longTier + "\nVol:" + str.tostring(relativeVolume, "#.#") + "×",
+              color=colorLongSignal, textcolor=color.white,
+              style=label.style_label_up, size=size.small)
+    
+    recentLow = ta.lowest(low, 5)
+    line.new(bar_index - 3, recentLow - atrVal * 0.2, bar_index + 3, recentLow - atrVal * 0.2,
+             color=color.new(color.red, 30), width=2, style=line.style_dotted)
+
+// Short signal marker
+if shortSignal and isRecent
+    label.new(bar_index, high + atrVal * 0.3, "▼",
+              color=color.new(color.black, 100), textcolor=colorShortSignal,
+              style=label.style_label_down, size=size.normal)
+    
+    label.new(bar_index, high + atrVal * 0.8,
+              "MR↓ " + shortTier + "\nVol:" + str.tostring(relativeVolume, "#.#") + "×",
+              color=colorShortSignal, textcolor=color.white,
+              style=label.style_label_down, size=size.small)
+    
+    recentHigh = ta.highest(high, 5)
+    line.new(bar_index - 3, recentHigh + atrVal * 0.2, bar_index + 3, recentHigh + atrVal * 0.2,
+             color=color.new(color.red, 30), width=2, style=line.style_dotted)
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// COMPACT INFO TABLE
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+var table infoTable = table.new(position.top_right, 2, 5, bgcolor=color.new(color.black, 30), frame_width=1)
+
+if barstate.islast
+    marketState = wasAboveBalance ? "ABOVE BAL" : wasBelowBalance ? "BELOW BAL" : "IN BALANCE"
+    stateColor  = wasAboveBalance or wasBelowBalance ? color.yellow : color.lime
+    
+    table.cell(infoTable, 0, 0, "MR SNIPER", text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 0, "", text_color=color.white, text_size=size.small)
+    
+    table.cell(infoTable, 0, 1, "State", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 1, marketState, text_color=stateColor, text_size=size.tiny)
+    
+    table.cell(infoTable, 0, 2, "POC", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 2, str.tostring(pocLevel, "#.##"), text_color=colorPOC, text_size=size.tiny)
+    
+    table.cell(infoTable, 0, 3, "Session", text_color=color.gray, text_size=size.tiny)
+    sessionText = inLondon ? "LONDON" : inNY ? "NY" : "—"
+    table.cell(infoTable, 1, 3, sessionText, text_color=sessionOK ? color.lime : color.gray, text_size=size.tiny)
+    
+    reclaimStatus = hadReclaimFromAbove ? "SHORT SETUP" : hadReclaimFromBelow ? "LONG SETUP" : "WAITING"
+    reclaimColor  = hadReclaimFromAbove ? colorShortSignal : hadReclaimFromBelow ? colorLongSignal : color.gray
+    table.cell(infoTable, 0, 4, "Setup", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 4, reclaimStatus, text_color=reclaimColor, text_size=size.tiny)
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// ALERTS
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+alertcondition(longSignal, title="MR Long Signal", message="SNIPER MR: Long signal - Failed breakdown reclaimed. Target: POC")
+alertcondition(shortSignal, title="MR Short Signal", message="SNIPER MR: Short signal - Failed breakout reclaimed. Target: POC")
+alertcondition(reclaimedFromAbove, title="Reclaimed From Above", message="SNIPER MR: Price reclaimed from above - SHORT setup forming")
+alertcondition(reclaimedFromBelow, title="Reclaimed From Below", message="SNIPER MR: Price reclaimed from below - LONG setup forming")
