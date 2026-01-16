@@ -1,25 +1,44 @@
 //@version=6
-indicator("SNIPER ORB V4", shorttitle="SNIPER ORB V4", overlay=true, max_lines_count=500, max_boxes_count=500, max_labels_count=500)
+indicator("SNIPER ORB V4.3", shorttitle="SNIPER ORB V4.3", overlay=true, max_lines_count=500, max_boxes_count=500, max_labels_count=500)
 
 //═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
-// SNIPER ORB V4 - ENHANCED WITH CONFIRMATION PATTERNS
+// SNIPER ORB V4.3 - ENHANCED ZONE MANAGEMENT
 // 
-// IMPROVEMENTS FROM V3:
-// - Added breakout confirmation signals with volume + body analysis
-// - Retest pattern detection with engulfing candle confirmation
-// - FVG (Fair Value Gap) detection for optimal entry zones
-// - Anti-fakeout filtering with momentum validation
-// - Color-coded confirmation candles
-// - Delta-like analysis using close vs open comparison
-// - Institutional absorption detection via wick analysis
+// IMPROVEMENTS FROM V4.2:
+// - DST-aware session detection (adjusts for Daylight Savings Time)
+// - Improved zone removal: FVG/iFVG/S&D zones removed when price completely passes through
+// - Enhanced iFVG detection with consistent removal logic
+// - Better "body-through-body" invalidation (no wicks counted)
+// - Optimized for high-volatile futures (NQ, ES, YM, CL, etc.)
+//
+// SESSIONS (EST/ET - DST Adjusted):
+// - Asian:   6:00 PM - 2:59 AM (Sydney → Hong Kong → Tokyo)
+// - London:  3:00 AM - 9:29 AM
+// - New York: 9:30 AM - 5:00 PM
 //═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
 //═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
 // INPUTS
 //═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
-// Session Selection
-sessionType = input.string("New York", "Active Session", options=["London", "New York"], group="Session Settings")
+// ORB Session Selection (for breakout signals)
+sessionType = input.string("New York", "ORB Active Session", options=["London", "New York"], group="Session Settings")
+
+// === KILLZONE SETTINGS ===
+grpKillzone = "Killzone Settings"
+showAsianKZ = input.bool(true, "Show Asian Session (6PM-2:59AM)", group=grpKillzone)
+showLondonKZ = input.bool(true, "Show London Session (3AM-9:29AM)", group=grpKillzone)
+showNYKZ = input.bool(true, "Show New York Session (9:30AM-5PM)", group=grpKillzone)
+showKZLabels = input.bool(true, "Show Session Labels", group=grpKillzone)
+
+// Killzone Colors
+colorAsianHigh = input.color(color.new(#FF9800, 30), "Asian High", inline="kz_asian", group="Killzone Colors")
+colorAsianLow = input.color(color.new(#FF9800, 30), "Asian Low", inline="kz_asian", group="Killzone Colors")
+colorLondonHigh = input.color(color.new(#2196F3, 30), "London High", inline="kz_london", group="Killzone Colors")
+colorLondonLow = input.color(color.new(#2196F3, 30), "London Low", inline="kz_london", group="Killzone Colors")
+colorNYHigh = input.color(color.new(#4CAF50, 30), "NY High", inline="kz_ny", group="Killzone Colors")
+colorNYLow = input.color(color.new(#4CAF50, 30), "NY Low", inline="kz_ny", group="Killzone Colors")
+kzLineWidth = input.int(1, "Killzone Line Width", minval=1, maxval=3, group="Killzone Colors")
 
 // ORB Display Toggles
 show5minORB = input.bool(true, "Show 5min ORB", group="ORB Display", inline="orb_tog")
@@ -50,25 +69,53 @@ showVWAP = input.bool(true, "Show Anchored VWAP", group="VWAP Settings")
 vwapColor = input.color(color.new(#FFC107, 0), "VWAP Color", group="VWAP Settings")
 vwapWidth = input.int(2, "VWAP Width", minval=1, maxval=5, group="VWAP Settings")
 
-// === NEW V4: CONFIRMATION SETTINGS ===
+// === FVG & iFVG SETTINGS ===
+grpFVG = "FVG & iFVG Settings"
+showFVGZones = input.bool(true, "Show FVG Zones", group=grpFVG)
+showIFVGZones = input.bool(true, "Show iFVG Zones (Inverse)", group=grpFVG)
+fvgMinATRMult = input.float(0.3, "FVG Min Size (ATR Multiplier)", minval=0.1, maxval=2.0, step=0.1, group=grpFVG,
+    tooltip="Minimum FVG size relative to ATR for volatile markets")
+maxFVGCount = input.int(10, "Max FVG Zones", minval=5, maxval=30, group=grpFVG)
+fvgExtendBars = input.int(50, "FVG Extend Bars", minval=20, maxval=200, group=grpFVG)
+
+// === SUPPLY & DEMAND SETTINGS ===
+grpSD = "Supply & Demand Zones"
+showSupplyDemand = input.bool(true, "Show Supply/Demand Zones", group=grpSD)
+sdSwingLookback = input.int(5, "Swing Lookback", minval=2, maxval=20, group=grpSD,
+    tooltip="Bars to look back for swing highs/lows")
+sdMinStrength = input.int(2, "Min Zone Strength", minval=1, maxval=5, group=grpSD,
+    tooltip="Minimum touches/rejections for valid zone")
+sdATRMultiplier = input.float(0.5, "Zone Size (ATR Mult)", minval=0.2, maxval=2.0, step=0.1, group=grpSD)
+maxSDZones = input.int(8, "Max S/D Zones", minval=4, maxval=20, group=grpSD)
+sdExtendBars = input.int(100, "S/D Extend Bars", minval=20, maxval=300, group=grpSD)
+
+// === ZONE REMOVAL SETTINGS ===
+grpRemoval = "Zone Removal Settings"
+removeMitigatedFVG = input.bool(true, "Remove Filled FVG Zones", group=grpRemoval)
+removeMitigatedSD = input.bool(true, "Remove Invalidated S/D Zones", group=grpRemoval)
+
+// === CONFIRMATION SETTINGS ===
 grpConfirm = "Confirmation Settings"
 showConfirmationSignals = input.bool(true, "Show Breakout Confirmation Signals", group=grpConfirm)
 showRetestSignals = input.bool(true, "Show Retest Entry Signals", group=grpConfirm)
-showFVGZones = input.bool(true, "Show FVG Zones for Entry", group=grpConfirm)
 highlightConfirmCandles = input.bool(true, "Highlight Confirmation Candles", group=grpConfirm)
 
-minVolumeMultiplier = input.float(1.3, "Min Volume Multiplier", minval=1.0, maxval=3.0, step=0.1, group=grpConfirm,
-    tooltip="Breakout volume must be this times the average")
-minBodyPercent = input.float(60.0, "Min Body % for Confirmation", minval=40, maxval=85, step=5, group=grpConfirm,
+minVolumeMultiplier = input.float(1.2, "Min Volume Multiplier", minval=1.0, maxval=3.0, step=0.1, group=grpConfirm,
+    tooltip="Breakout volume must be this times the average (lowered for volatile markets)")
+minBodyPercent = input.float(55.0, "Min Body % for Confirmation", minval=40, maxval=85, step=5, group=grpConfirm,
     tooltip="Candle body must be this % of total range")
-fvgMinSize = input.float(0.3, "FVG Min Size (% of ORB)", minval=0.1, maxval=1.0, step=0.1, group=grpConfirm,
-    tooltip="Minimum FVG size as percentage of 30min ORB range")
+
+// Zone Colors
+colorFVGBullish = input.color(color.new(#00E676, 80), "Bullish FVG Zone", group="Zone Colors")
+colorFVGBearish = input.color(color.new(#FF5252, 80), "Bearish FVG Zone", group="Zone Colors")
+colorIFVGBullish = input.color(color.new(#64FFDA, 85), "Bullish iFVG Zone", group="Zone Colors")
+colorIFVGBearish = input.color(color.new(#FF80AB, 85), "Bearish iFVG Zone", group="Zone Colors")
+colorSupplyZone = input.color(color.new(#E91E63, 85), "Supply Zone", group="Zone Colors")
+colorDemandZone = input.color(color.new(#00BCD4, 85), "Demand Zone", group="Zone Colors")
 
 // Confirmation Colors
 colorBullishConfirm = input.color(color.new(#00E676, 0), "Bullish Confirm", group="Confirmation Colors")
 colorBearishConfirm = input.color(color.new(#FF5252, 0), "Bearish Confirm", group="Confirmation Colors")
-colorFVGBullish = input.color(color.new(#00E676, 85), "Bullish FVG Zone", group="Confirmation Colors")
-colorFVGBearish = input.color(color.new(#FF5252, 85), "Bearish FVG Zone", group="Confirmation Colors")
 
 // Text Size
 txtSize = input.string("Small", "Label Size", options=["Tiny","Small","Normal","Large"], group="Display Settings")
@@ -78,27 +125,105 @@ txtSizeFormat = txtSize == "Tiny" ? size.tiny : txtSize == "Small" ? size.small 
 labelTolerance = input.float(2.0, "Label Overlap Tolerance (ticks)", minval=0.5, maxval=10, group="Display Settings")
 
 //═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
-// SESSION DETECTION
+// SESSION DETECTION & KILLZONES (DST-AWARE)
 //═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
 string tz = "America/New_York"
 
-// London: 3:00 AM - 9:30 AM ET
+// === DST (DAYLIGHT SAVINGS TIME) DETECTION ===
+// Automatically adjusts session times based on current DST status
+// US DST: 2nd Sunday of March to 1st Sunday of November
+// UK DST: Last Sunday of March to Last Sunday of October
+// Sydney DST: 1st Sunday of October to 1st Sunday of April (Southern Hemisphere - reversed)
+int previousSunday = dayofmonth - dayofweek + 1
+bool nyDST = false
+bool ukDST = false
+bool sydDST = false
+
+if month < 3 or month > 11
+    nyDST := false
+    ukDST := false
+    sydDST := true
+else if month > 4 and month < 10
+    nyDST := true
+    ukDST := true
+    sydDST := false
+else if month == 3
+    nyDST := previousSunday >= 8
+    ukDST := previousSunday >= 24
+    sydDST := true
+else if month == 4
+    nyDST := true
+    ukDST := true
+    sydDST := previousSunday <= 0
+else if month == 10
+    nyDST := true
+    ukDST := previousSunday <= 24
+    sydDST := previousSunday >= 0
+else // month == 11
+    nyDST := previousSunday <= 0
+    ukDST := false
+    sydDST := true
+
+// === KILLZONE SESSION DEFINITIONS ===
+// Sessions are defined in EST/ET and automatically adjust for DST
+// Asian Session: 6:00 PM - 2:59 AM ET (spans midnight, needs special handling)
+// We split it: 1800-2359 (evening) and 0000-0259 (early morning)
+string asianEveningSpec = "1800-2359:23456"
+string asianMorningSpec = "0000-0259:23456"
+bool inAsianEvening = not na(time(timeframe.period, asianEveningSpec, tz))
+bool inAsianMorning = not na(time(timeframe.period, asianMorningSpec, tz))
+bool inAsian = inAsianEvening or inAsianMorning
+bool asianStart = inAsian and not inAsian[1]
+bool asianEnd = inAsian[1] and not inAsian
+
+// London Session: 3:00 AM - 9:29 AM ET
+string londonKZSpec = "0300-0929:23456"
+bool inLondonKZ = not na(time(timeframe.period, londonKZSpec, tz))
+bool londonKZStart = inLondonKZ and not inLondonKZ[1]
+bool londonKZEnd = inLondonKZ[1] and not inLondonKZ
+
+// New York Session: 9:30 AM - 5:00 PM ET
+string nyKZSpec = "0930-1700:23456"
+bool inNYKZ = not na(time(timeframe.period, nyKZSpec, tz))
+bool nyKZStart = inNYKZ and not inNYKZ[1]
+bool nyKZEnd = inNYKZ[1] and not inNYKZ
+
+// Daily Reset Detection: 6:00 PM EST (Globex open for new trading day)
+int currentHourKZ = hour(time, tz)
+int currentMinuteKZ = minute(time, tz)
+bool isDailyReset = currentHourKZ == 18 and currentMinuteKZ == 0 and not (hour(time[1], tz) == 18 and minute(time[1], tz) == 0)
+
+// === ORB SESSION DETECTION (for breakout signals) ===
+// London for ORB: 3:00 AM - 9:30 AM ET
 string londonSpec = "0300-0930:23456"
 bool inLondon = not na(time(timeframe.period, londonSpec, tz))
 bool londonStart = inLondon and not inLondon[1]
 bool londonEnd = inLondon[1] and not inLondon
 
-// New York: 9:30 AM - 5:00 PM ET
+// New York for ORB: 9:30 AM - 5:00 PM ET
 string nySpec = "0930-1700:23456"
 bool inNY = not na(time(timeframe.period, nySpec, tz))
 bool nyStart = inNY and not inNY[1]
 bool nyEnd = inNY[1] and not inNY
 
-// Active session based on user selection
+// Active session based on user selection (for ORB)
 bool isActiveSession = sessionType == "London" ? inLondon : inNY
 bool isSessionStart = sessionType == "London" ? londonStart : nyStart
 bool isSessionEnd = sessionType == "London" ? londonEnd : nyEnd
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// VOLATILITY & VOLUME ANALYSIS (OPTIMIZED FOR FUTURES)
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// ATR for dynamic zone sizing in volatile markets
+float atrValue = ta.atr(14)
+float avgVolume = ta.sma(volume, 20)
+bool isHighVolume = volume >= avgVolume * minVolumeMultiplier
+
+// Volatility expansion detection
+float atrSMA = ta.sma(atrValue, 20)
+bool isHighVolatility = atrValue > atrSMA * 1.3
 
 //═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
 // ORB STATE VARIABLES
@@ -145,30 +270,88 @@ var array<line> downTargetLines = array.new<line>()
 var array<label> upTargetLabels = array.new<label>()
 var array<label> downTargetLabels = array.new<label>()
 
-// === NEW V4: Breakout Tracking ===
+// Breakout Tracking
 var bool broke30High = false
 var bool broke30Low = false
 var int breakoutBar = na
 var float breakoutPrice = na
 
-// FVG Tracking
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// KILLZONE STATE VARIABLES
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Asian Session High/Low (6PM - 2:59AM EST)
+var float asianHigh = na
+var float asianLow = na
+var int asianStartBar = na
+var bool asianComplete = false
+
+// London Session High/Low (3AM - 9:29AM EST)
+var float londonKZHigh = na
+var float londonKZLow = na
+var int londonKZStartBar = na
+var bool londonKZComplete = false
+
+// New York Session High/Low (9:30AM - 5PM EST)
+var float nyKZHigh = na
+var float nyKZLow = na
+var int nyKZStartBar = na
+var bool nyKZComplete = false
+
+// Killzone Line Objects
+var line lineAsianHigh = na
+var line lineAsianLow = na
+var line lineLondonKZHigh = na
+var line lineLondonKZLow = na
+var line lineNYKZHigh = na
+var line lineNYKZLow = na
+
+// Killzone Labels
+var label labelAsianHigh = na
+var label labelAsianLow = na
+var label labelLondonKZHigh = na
+var label labelLondonKZLow = na
+var label labelNYKZHigh = na
+var label labelNYKZLow = na
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// FVG & iFVG TRACKING STRUCTURES
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// FVG arrays - store zone data
 var array<box> fvgBoxes = array.new<box>()
 var array<float> fvgHighs = array.new<float>()
 var array<float> fvgLows = array.new<float>()
 var array<bool> fvgBullish = array.new<bool>()
+var array<int> fvgStartBars = array.new<int>()
+
+// iFVG arrays (Inverse FVGs - gaps filled against the trend)
+var array<box> ifvgBoxes = array.new<box>()
+var array<float> ifvgHighs = array.new<float>()
+var array<float> ifvgLows = array.new<float>()
+var array<bool> ifvgBullish = array.new<bool>()
+var array<int> ifvgStartBars = array.new<int>()
 
 //═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
-// VOLUME ANALYSIS
+// SUPPLY & DEMAND ZONE STRUCTURES
 //═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
-float avgVolume = ta.sma(volume, 20)
-bool isHighVolume = volume >= avgVolume * minVolumeMultiplier
+var array<box> supplyBoxes = array.new<box>()
+var array<float> supplyHighs = array.new<float>()
+var array<float> supplyLows = array.new<float>()
+var array<int> supplyStartBars = array.new<int>()
+var array<int> supplyTouches = array.new<int>()
+
+var array<box> demandBoxes = array.new<box>()
+var array<float> demandHighs = array.new<float>()
+var array<float> demandLows = array.new<float>()
+var array<int> demandStartBars = array.new<int>()
+var array<int> demandTouches = array.new<int>()
 
 //═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
 // CANDLE ANALYSIS FUNCTIONS
 //═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
-// Calculate candle metrics
 getCandleMetrics() =>
     float candleRange = high - low
     float bodySize = math.abs(close - open)
@@ -181,44 +364,41 @@ getCandleMetrics() =>
 
 [bodyPercent, upperWickPct, lowerWickPct, bodySize, candleRange] = getCandleMetrics()
 
-// Check if candle is bullish with strong body and minimal upper wick
+// Momentum candle detection - optimized for volatile futures
 isBullishMomentum() =>
     bool isBullish = close > open
     bool strongBody = bodyPercent >= minBodyPercent
-    bool minimalUpperWick = upperWickPct <= 25  // No major rejection at top
+    bool minimalUpperWick = upperWickPct <= 30  // Slightly relaxed for volatile markets
     isBullish and strongBody and minimalUpperWick
 
-// Check if candle is bearish with strong body and minimal lower wick
 isBearishMomentum() =>
     bool isBearish = close < open
     bool strongBody = bodyPercent >= minBodyPercent
-    bool minimalLowerWick = lowerWickPct <= 25  // No major rejection at bottom
+    bool minimalLowerWick = lowerWickPct <= 30
     isBearish and strongBody and minimalLowerWick
 
-// Bullish engulfing pattern for retest entries
+// Engulfing patterns
 isBullishEngulfing() =>
     bool prevBearish = close[1] < open[1]
     bool currBullish = close > open
     bool engulfsBody = close > open[1] and open <= close[1]
-    bool strongCurrent = bodyPercent >= 50
+    bool strongCurrent = bodyPercent >= 45
     prevBearish and currBullish and engulfsBody and strongCurrent
 
-// Bearish engulfing pattern for retest entries
 isBearishEngulfing() =>
     bool prevBullish = close[1] > open[1]
     bool currBearish = close < open
     bool engulfsBody = close < open[1] and open >= close[1]
-    bool strongCurrent = bodyPercent >= 50
+    bool strongCurrent = bodyPercent >= 45
     prevBullish and currBearish and engulfsBody and strongCurrent
 
-// Hammer pattern (for bullish reversals at support)
+// Reversal patterns
 isHammer() =>
     bool smallBody = bodyPercent <= 40
     bool longLowerWick = lowerWickPct >= 50
     bool tinyUpperWick = upperWickPct <= 15
     smallBody and longLowerWick and tinyUpperWick
 
-// Shooting star (for bearish reversals at resistance)
 isShootingStar() =>
     bool smallBody = bodyPercent <= 40
     bool longUpperWick = upperWickPct >= 50
@@ -226,72 +406,631 @@ isShootingStar() =>
     smallBody and longUpperWick and tinyLowerWick
 
 //═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
-// FVG (FAIR VALUE GAP) DETECTION
+// FVG DETECTION - ATR-BASED FOR VOLATILE MARKETS
 //═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
-// Bullish FVG: Gap between candle[2] high and candle[0] low
+// Minimum gap size based on ATR for volatile markets
+float minFVGSize = atrValue * fvgMinATRMult
+
+// Bullish FVG: Gap between candle[2] high and candle[0] low (price gapped up)
 detectBullishFVG() =>
     float gapSize = low - high[2]
     bool hasGap = gapSize > 0
-    bool significantGap = not na(orb30Range) and orb30Range > 0 and gapSize >= orb30Range * fvgMinSize
-    bool isBullishMove = close > close[2]
-    [hasGap and significantGap and isBullishMove, high[2], low]
+    bool significantGap = gapSize >= minFVGSize
+    bool isBullishMove = close > close[2] and close > open
+    [hasGap and significantGap and isBullishMove, high[2], low, gapSize]
 
-// Bearish FVG: Gap between candle[0] high and candle[2] low
+// Bearish FVG: Gap between candle[0] high and candle[2] low (price gapped down)
 detectBearishFVG() =>
     float gapSize = low[2] - high
     bool hasGap = gapSize > 0
-    bool significantGap = not na(orb30Range) and orb30Range > 0 and gapSize >= orb30Range * fvgMinSize
-    bool isBearishMove = close < close[2]
-    [hasGap and significantGap and isBearishMove, high, low[2]]
+    bool significantGap = gapSize >= minFVGSize
+    bool isBearishMove = close < close[2] and close < open
+    [hasGap and significantGap and isBearishMove, high, low[2], gapSize]
 
-[hasBullishFVG, bullFVGLow, bullFVGHigh] = detectBullishFVG()
-[hasBearishFVG, bearFVGHigh, bearFVGLow] = detectBearishFVG()
+// iFVG Detection (Inverse FVG - gaps that occur against the prevailing momentum)
+// Bullish iFVG: Gap down in an uptrend (potential support)
+detectBullishIFVG() =>
+    float gapSize = low[2] - high
+    bool hasGap = gapSize > 0
+    bool significantGap = gapSize >= minFVGSize * 0.7  // Slightly smaller threshold
+    bool uptrendContext = close > ta.sma(close, 10)
+    bool isExhaustionGap = close > open  // Recovered
+    [hasGap and significantGap and uptrendContext and isExhaustionGap, high, low[2], gapSize]
 
-// Track FVGs during session
-if isActiveSession and orb30Complete and showFVGZones
-    // Create bullish FVG box
+// Bearish iFVG: Gap up in a downtrend (potential resistance)
+detectBearishIFVG() =>
+    float gapSize = low - high[2]
+    bool hasGap = gapSize > 0
+    bool significantGap = gapSize >= minFVGSize * 0.7
+    bool downtrendContext = close < ta.sma(close, 10)
+    bool isExhaustionGap = close < open  // Rejected
+    [hasGap and significantGap and downtrendContext and isExhaustionGap, high[2], low, gapSize]
+
+[hasBullishFVG, bullFVGLow, bullFVGHigh, bullFVGSize] = detectBullishFVG()
+[hasBearishFVG, bearFVGHigh, bearFVGLow, bearFVGSize] = detectBearishFVG()
+[hasBullishIFVG, bullIFVGHigh, bullIFVGLow, bullIFVGSize] = detectBullishIFVG()
+[hasBearishIFVG, bearIFVGHigh, bearIFVGLow, bearIFVGSize] = detectBearishIFVG()
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// SUPPLY & DEMAND ZONE DETECTION
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Swing High Detection (potential Supply Zone origin)
+isSwingHigh = ta.pivothigh(high, sdSwingLookback, sdSwingLookback) != 0
+
+// Swing Low Detection (potential Demand Zone origin)  
+isSwingLow = ta.pivotlow(low, sdSwingLookback, sdSwingLookback) != 0
+
+// Strong bearish move from swing high (Supply Zone)
+isStrongBearishMove() =>
+    bool strongDrop = close < close[sdSwingLookback]
+    bool momentumConfirm = close < open and bodyPercent >= 40
+    strongDrop and momentumConfirm
+
+// Strong bullish move from swing low (Demand Zone)
+isStrongBullishMove() =>
+    bool strongRise = close > close[sdSwingLookback]
+    bool momentumConfirm = close > open and bodyPercent >= 40
+    strongRise and momentumConfirm
+
+// Zone size based on ATR
+float zoneSize = atrValue * sdATRMultiplier
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// ZONE MITIGATION CHECK - ENHANCED BODY-THROUGH-BODY DETECTION
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Check if a zone has been COMPLETELY passed through (body-through-body, NOT wicks)
+// This is the strictest check - the entire candle body must be BEYOND the zone
+// For bullish zones: price must close completely BELOW zone (bearish invalidation)
+// For bearish zones: price must close completely ABOVE zone (bullish invalidation)
+
+// Primary function: Check if candle body has completely passed through the zone
+isBodyCompletelyThrough(float zoneHigh, float zoneLow, bool isBullishZone) =>
+    float bodyTop = math.max(open, close)
+    float bodyBottom = math.min(open, close)
+    
+    if isBullishZone
+        // For bullish zones (demand/bullish FVG/bullish iFVG):
+        // Zone invalidated when candle body is ENTIRELY below zone low
+        // Both open and close must be below zone low (bearish move through zone)
+        bool bodyBelowZone = bodyTop < zoneLow
+        bodyBelowZone
+    else
+        // For bearish zones (supply/bearish FVG/bearish iFVG):
+        // Zone invalidated when candle body is ENTIRELY above zone high
+        // Both open and close must be above zone high (bullish move through zone)
+        bool bodyAboveZone = bodyBottom > zoneHigh
+        bodyAboveZone
+
+// Secondary check: Has price traded completely through on ANY bar since zone creation
+// This is used in the loop to check historical price action
+isPriceCompletelyThrough(float zoneHigh, float zoneLow, bool isBullishZone) =>
+    float bodyTop = math.max(open, close)
+    float bodyBottom = math.min(open, close)
+    
+    if isBullishZone
+        // Bullish zone invalidated: body completely below zone low
+        bool completelyBelow = bodyTop < zoneLow
+        completelyBelow
+    else
+        // Bearish zone invalidated: body completely above zone high  
+        bool completelyAbove = bodyBottom > zoneHigh
+        completelyAbove
+
+// Additional check: Zone partially filled (for potential future use)
+isZonePartiallyFilled(float zoneHigh, float zoneLow, bool isBullishZone) =>
+    if isBullishZone
+        // Check if price wicked into zone but didn't pass through
+        bool wickedIn = low <= zoneHigh and close > zoneLow
+        wickedIn
+    else
+        bool wickedIn = high >= zoneLow and close < zoneHigh
+        wickedIn
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// FVG ZONE MANAGEMENT - CREATE & REMOVE
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Remove oldest FVG if limit reached
+removeOldestFVG() =>
+    if array.size(fvgBoxes) > maxFVGCount
+        box oldBox = array.shift(fvgBoxes)
+        box.delete(oldBox)
+        array.shift(fvgHighs)
+        array.shift(fvgLows)
+        array.shift(fvgBullish)
+        array.shift(fvgStartBars)
+
+removeOldestIFVG() =>
+    if array.size(ifvgBoxes) > maxFVGCount
+        box oldBox = array.shift(ifvgBoxes)
+        box.delete(oldBox)
+        array.shift(ifvgHighs)
+        array.shift(ifvgLows)
+        array.shift(ifvgBullish)
+        array.shift(ifvgStartBars)
+
+// Check and remove filled FVG zones (body-through-body removal)
+checkAndRemoveFVGs() =>
+    if removeMitigatedFVG and array.size(fvgBoxes) > 0
+        // Iterate backwards to safely remove elements
+        for i = array.size(fvgBoxes) - 1 to 0
+            if i >= 0 and i < array.size(fvgBoxes)
+                float zHigh = array.get(fvgHighs, i)
+                float zLow = array.get(fvgLows, i)
+                bool isBull = array.get(fvgBullish, i)
+                
+                // Check if candle body has completely passed through zone
+                // Bullish FVG: invalidated when body trades entirely BELOW zone
+                // Bearish FVG: invalidated when body trades entirely ABOVE zone
+                if isBodyCompletelyThrough(zHigh, zLow, isBull)
+                    box bx = array.get(fvgBoxes, i)
+                    box.delete(bx)
+                    array.remove(fvgBoxes, i)
+                    array.remove(fvgHighs, i)
+                    array.remove(fvgLows, i)
+                    array.remove(fvgBullish, i)
+                    array.remove(fvgStartBars, i)
+
+// Check and remove filled iFVG zones (same body-through-body logic)
+// iFVG removal is consistent with FVG - when price passes completely through
+checkAndRemoveIFVGs() =>
+    if removeMitigatedFVG and array.size(ifvgBoxes) > 0
+        for i = array.size(ifvgBoxes) - 1 to 0
+            if i >= 0 and i < array.size(ifvgBoxes)
+                float zHigh = array.get(ifvgHighs, i)
+                float zLow = array.get(ifvgLows, i)
+                bool isBull = array.get(ifvgBullish, i)
+                
+                // iFVG removal: same logic as FVG
+                // Bullish iFVG (gap down in uptrend): invalidated when body below zone
+                // Bearish iFVG (gap up in downtrend): invalidated when body above zone
+                if isBodyCompletelyThrough(zHigh, zLow, isBull)
+                    box bx = array.get(ifvgBoxes, i)
+                    box.delete(bx)
+                    array.remove(ifvgBoxes, i)
+                    array.remove(ifvgHighs, i)
+                    array.remove(ifvgLows, i)
+                    array.remove(ifvgBullish, i)
+                    array.remove(ifvgStartBars, i)
+
+// Create FVG zones
+if isActiveSession and showFVGZones
+    // Bullish FVG
     if hasBullishFVG
-        box fvgBox = box.new(bar_index - 2, bullFVGHigh, bar_index + 20, bullFVGLow, 
-                             border_color=color.new(colorFVGBullish, 50), bgcolor=colorFVGBullish)
+        box fvgBox = box.new(bar_index - 2, bullFVGHigh, bar_index + fvgExtendBars, bullFVGLow, 
+                             border_color=color.new(colorFVGBullish, 50), bgcolor=colorFVGBullish,
+                             border_width=1, border_style=line.style_solid)
         array.push(fvgBoxes, fvgBox)
         array.push(fvgHighs, bullFVGHigh)
         array.push(fvgLows, bullFVGLow)
         array.push(fvgBullish, true)
+        array.push(fvgStartBars, bar_index)
+        removeOldestFVG()
     
-    // Create bearish FVG box
+    // Bearish FVG
     if hasBearishFVG
-        box fvgBox = box.new(bar_index - 2, bearFVGHigh, bar_index + 20, bearFVGLow, 
-                             border_color=color.new(colorFVGBearish, 50), bgcolor=colorFVGBearish)
+        box fvgBox = box.new(bar_index - 2, bearFVGHigh, bar_index + fvgExtendBars, bearFVGLow, 
+                             border_color=color.new(colorFVGBearish, 50), bgcolor=colorFVGBearish,
+                             border_width=1, border_style=line.style_solid)
         array.push(fvgBoxes, fvgBox)
         array.push(fvgHighs, bearFVGHigh)
         array.push(fvgLows, bearFVGLow)
         array.push(fvgBullish, false)
+        array.push(fvgStartBars, bar_index)
+        removeOldestFVG()
 
-// Check if price is touching an FVG zone (for retest entries)
-isTouchingBullishFVG() =>
-    bool touching = false
-    if array.size(fvgBoxes) > 0
-        for i = 0 to array.size(fvgBoxes) - 1
-            if array.get(fvgBullish, i) == true
-                float fvgH = array.get(fvgHighs, i)
-                float fvgL = array.get(fvgLows, i)
-                if low <= fvgH and high >= fvgL
-                    touching := true
-                    break
-    touching
+// Create iFVG zones
+if isActiveSession and showIFVGZones
+    // Bullish iFVG (support in uptrend)
+    if hasBullishIFVG
+        box ifvgBox = box.new(bar_index - 2, bullIFVGHigh, bar_index + fvgExtendBars, bullIFVGLow, 
+                              border_color=color.new(colorIFVGBullish, 40), bgcolor=colorIFVGBullish,
+                              border_width=1, border_style=line.style_dashed)
+        array.push(ifvgBoxes, ifvgBox)
+        array.push(ifvgHighs, bullIFVGHigh)
+        array.push(ifvgLows, bullIFVGLow)
+        array.push(ifvgBullish, true)
+        array.push(ifvgStartBars, bar_index)
+        removeOldestIFVG()
+    
+    // Bearish iFVG (resistance in downtrend)
+    if hasBearishIFVG
+        box ifvgBox = box.new(bar_index - 2, bearIFVGHigh, bar_index + fvgExtendBars, bearIFVGLow, 
+                              border_color=color.new(colorIFVGBearish, 40), bgcolor=colorIFVGBearish,
+                              border_width=1, border_style=line.style_dashed)
+        array.push(ifvgBoxes, ifvgBox)
+        array.push(ifvgHighs, bearIFVGHigh)
+        array.push(ifvgLows, bearIFVGLow)
+        array.push(ifvgBullish, false)
+        array.push(ifvgStartBars, bar_index)
+        removeOldestIFVG()
 
-isTouchingBearishFVG() =>
-    bool touching = false
-    if array.size(fvgBoxes) > 0
-        for i = 0 to array.size(fvgBoxes) - 1
-            if array.get(fvgBullish, i) == false
-                float fvgH = array.get(fvgHighs, i)
-                float fvgL = array.get(fvgLows, i)
-                if low <= fvgH and high >= fvgL
-                    touching := true
+// Check and remove filled zones every bar
+checkAndRemoveFVGs()
+checkAndRemoveIFVGs()
+
+// Extend existing FVG boxes
+if array.size(fvgBoxes) > 0
+    for i = 0 to array.size(fvgBoxes) - 1
+        if i < array.size(fvgBoxes)
+            box bx = array.get(fvgBoxes, i)
+            box.set_right(bx, bar_index + fvgExtendBars)
+
+if array.size(ifvgBoxes) > 0
+    for i = 0 to array.size(ifvgBoxes) - 1
+        if i < array.size(ifvgBoxes)
+            box bx = array.get(ifvgBoxes, i)
+            box.set_right(bx, bar_index + fvgExtendBars)
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// SUPPLY & DEMAND ZONE MANAGEMENT
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+removeOldestSupply() =>
+    if array.size(supplyBoxes) > maxSDZones
+        box oldBox = array.shift(supplyBoxes)
+        box.delete(oldBox)
+        array.shift(supplyHighs)
+        array.shift(supplyLows)
+        array.shift(supplyStartBars)
+        array.shift(supplyTouches)
+
+removeOldestDemand() =>
+    if array.size(demandBoxes) > maxSDZones
+        box oldBox = array.shift(demandBoxes)
+        box.delete(oldBox)
+        array.shift(demandHighs)
+        array.shift(demandLows)
+        array.shift(demandStartBars)
+        array.shift(demandTouches)
+
+// Check and remove invalidated S/D zones (body-through-body removal)
+checkAndRemoveSupplyZones() =>
+    if removeMitigatedSD and array.size(supplyBoxes) > 0
+        for i = array.size(supplyBoxes) - 1 to 0
+            if i >= 0 and i < array.size(supplyBoxes)
+                float zHigh = array.get(supplyHighs, i)
+                float zLow = array.get(supplyLows, i)
+                
+                // Supply zone (bearish zone) invalidated when candle body is entirely ABOVE zone
+                // Both open and close must be above zone high (bullish breakthrough)
+                if isBodyCompletelyThrough(zHigh, zLow, false)
+                    box bx = array.get(supplyBoxes, i)
+                    box.delete(bx)
+                    array.remove(supplyBoxes, i)
+                    array.remove(supplyHighs, i)
+                    array.remove(supplyLows, i)
+                    array.remove(supplyStartBars, i)
+                    array.remove(supplyTouches, i)
+
+checkAndRemoveDemandZones() =>
+    if removeMitigatedSD and array.size(demandBoxes) > 0
+        for i = array.size(demandBoxes) - 1 to 0
+            if i >= 0 and i < array.size(demandBoxes)
+                float zHigh = array.get(demandHighs, i)
+                float zLow = array.get(demandLows, i)
+                
+                // Demand zone (bullish zone) invalidated when candle body is entirely BELOW zone
+                // Both open and close must be below zone low (bearish breakthrough)
+                if isBodyCompletelyThrough(zHigh, zLow, true)
+                    box bx = array.get(demandBoxes, i)
+                    box.delete(bx)
+                    array.remove(demandBoxes, i)
+                    array.remove(demandHighs, i)
+                    array.remove(demandLows, i)
+                    array.remove(demandStartBars, i)
+                    array.remove(demandTouches, i)
+
+// Check for zone touches (to track strength)
+updateZoneTouches() =>
+    // Update supply zone touches
+    if array.size(supplyBoxes) > 0
+        for i = 0 to array.size(supplyBoxes) - 1
+            if i < array.size(supplyBoxes)
+                float zHigh = array.get(supplyHighs, i)
+                float zLow = array.get(supplyLows, i)
+                // Price touched zone (wicked into it)
+                if high >= zLow and high <= zHigh and close < zLow
+                    array.set(supplyTouches, i, array.get(supplyTouches, i) + 1)
+    
+    // Update demand zone touches
+    if array.size(demandBoxes) > 0
+        for i = 0 to array.size(demandBoxes) - 1
+            if i < array.size(demandBoxes)
+                float zHigh = array.get(demandHighs, i)
+                float zLow = array.get(demandLows, i)
+                // Price touched zone
+                if low <= zHigh and low >= zLow and close > zHigh
+                    array.set(demandTouches, i, array.get(demandTouches, i) + 1)
+
+// Create Supply Zone at swing high with strong move down
+if isActiveSession and showSupplyDemand and isSwingHigh[sdSwingLookback] and isStrongBearishMove()
+    float swingHighPrice = high[sdSwingLookback]
+    float zoneTop = swingHighPrice
+    float zoneBottom = swingHighPrice - zoneSize
+    
+    // Check if zone doesn't overlap too much with existing zones
+    bool canCreate = true
+    if array.size(supplyBoxes) > 0
+        for i = 0 to array.size(supplyBoxes) - 1
+            if i < array.size(supplyBoxes)
+                float existingHigh = array.get(supplyHighs, i)
+                float existingLow = array.get(supplyLows, i)
+                // Check for significant overlap
+                if math.abs(existingHigh - zoneTop) < zoneSize * 0.5
+                    canCreate := false
                     break
-    touching
+    
+    if canCreate
+        box supplyBox = box.new(bar_index - sdSwingLookback, zoneTop, bar_index + sdExtendBars, zoneBottom,
+                                border_color=color.new(colorSupplyZone, 30), bgcolor=colorSupplyZone,
+                                border_width=2, border_style=line.style_solid)
+        array.push(supplyBoxes, supplyBox)
+        array.push(supplyHighs, zoneTop)
+        array.push(supplyLows, zoneBottom)
+        array.push(supplyStartBars, bar_index)
+        array.push(supplyTouches, 1)
+        removeOldestSupply()
+
+// Create Demand Zone at swing low with strong move up
+if isActiveSession and showSupplyDemand and isSwingLow[sdSwingLookback] and isStrongBullishMove()
+    float swingLowPrice = low[sdSwingLookback]
+    float zoneBottom = swingLowPrice
+    float zoneTop = swingLowPrice + zoneSize
+    
+    bool canCreate = true
+    if array.size(demandBoxes) > 0
+        for i = 0 to array.size(demandBoxes) - 1
+            if i < array.size(demandBoxes)
+                float existingLow = array.get(demandLows, i)
+                if math.abs(existingLow - zoneBottom) < zoneSize * 0.5
+                    canCreate := false
+                    break
+    
+    if canCreate
+        box demandBox = box.new(bar_index - sdSwingLookback, zoneTop, bar_index + sdExtendBars, zoneBottom,
+                                border_color=color.new(colorDemandZone, 30), bgcolor=colorDemandZone,
+                                border_width=2, border_style=line.style_solid)
+        array.push(demandBoxes, demandBox)
+        array.push(demandHighs, zoneTop)
+        array.push(demandLows, zoneBottom)
+        array.push(demandStartBars, bar_index)
+        array.push(demandTouches, 1)
+        removeOldestDemand()
+
+// Update and check zones
+checkAndRemoveSupplyZones()
+checkAndRemoveDemandZones()
+updateZoneTouches()
+
+// Extend S/D boxes
+if array.size(supplyBoxes) > 0
+    for i = 0 to array.size(supplyBoxes) - 1
+        if i < array.size(supplyBoxes)
+            box bx = array.get(supplyBoxes, i)
+            box.set_right(bx, bar_index + sdExtendBars)
+
+if array.size(demandBoxes) > 0
+    for i = 0 to array.size(demandBoxes) - 1
+        if i < array.size(demandBoxes)
+            box bx = array.get(demandBoxes, i)
+            box.set_right(bx, bar_index + sdExtendBars)
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// KILLZONE HIGH/LOW TRACKING
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Helper function to delete killzone lines and labels
+deleteKillzoneLines() =>
+    if not na(lineAsianHigh)
+        line.delete(lineAsianHigh)
+    if not na(lineAsianLow)
+        line.delete(lineAsianLow)
+    if not na(lineLondonKZHigh)
+        line.delete(lineLondonKZHigh)
+    if not na(lineLondonKZLow)
+        line.delete(lineLondonKZLow)
+    if not na(lineNYKZHigh)
+        line.delete(lineNYKZHigh)
+    if not na(lineNYKZLow)
+        line.delete(lineNYKZLow)
+    if not na(labelAsianHigh)
+        label.delete(labelAsianHigh)
+    if not na(labelAsianLow)
+        label.delete(labelAsianLow)
+    if not na(labelLondonKZHigh)
+        label.delete(labelLondonKZHigh)
+    if not na(labelLondonKZLow)
+        label.delete(labelLondonKZLow)
+    if not na(labelNYKZHigh)
+        label.delete(labelNYKZHigh)
+    if not na(labelNYKZLow)
+        label.delete(labelNYKZLow)
+
+// === DAILY RESET AT 6:00 PM EST (Globex Open) ===
+if isDailyReset
+    // Reset all killzone levels
+    asianHigh := na
+    asianLow := na
+    asianStartBar := na
+    asianComplete := false
+    
+    londonKZHigh := na
+    londonKZLow := na
+    londonKZStartBar := na
+    londonKZComplete := false
+    
+    nyKZHigh := na
+    nyKZLow := na
+    nyKZStartBar := na
+    nyKZComplete := false
+    
+    // Delete old lines
+    deleteKillzoneLines()
+    
+    lineAsianHigh := na
+    lineAsianLow := na
+    lineLondonKZHigh := na
+    lineLondonKZLow := na
+    lineNYKZHigh := na
+    lineNYKZLow := na
+    labelAsianHigh := na
+    labelAsianLow := na
+    labelLondonKZHigh := na
+    labelLondonKZLow := na
+    labelNYKZHigh := na
+    labelNYKZLow := na
+
+// === ASIAN SESSION HIGH/LOW FORMATION ===
+if asianStart
+    asianHigh := high
+    asianLow := low
+    asianStartBar := bar_index
+    asianComplete := false
+
+if inAsian and not asianComplete
+    if high > asianHigh or na(asianHigh)
+        asianHigh := high
+    if low < asianLow or na(asianLow)
+        asianLow := low
+
+if asianEnd
+    asianComplete := true
+
+// === LONDON SESSION HIGH/LOW FORMATION ===
+if londonKZStart
+    londonKZHigh := high
+    londonKZLow := low
+    londonKZStartBar := bar_index
+    londonKZComplete := false
+
+if inLondonKZ and not londonKZComplete
+    if high > londonKZHigh or na(londonKZHigh)
+        londonKZHigh := high
+    if low < londonKZLow or na(londonKZLow)
+        londonKZLow := low
+
+if londonKZEnd
+    londonKZComplete := true
+
+// === NEW YORK SESSION HIGH/LOW FORMATION ===
+if nyKZStart
+    nyKZHigh := high
+    nyKZLow := low
+    nyKZStartBar := bar_index
+    nyKZComplete := false
+
+if inNYKZ and not nyKZComplete
+    if high > nyKZHigh or na(nyKZHigh)
+        nyKZHigh := high
+    if low < nyKZLow or na(nyKZLow)
+        nyKZLow := low
+
+if nyKZEnd
+    nyKZComplete := true
+
+// === DRAW KILLZONE LINES ===
+// Asian Session Lines (dotted, extend through the day)
+if showAsianKZ and not na(asianHigh) and not na(asianStartBar)
+    if na(lineAsianHigh)
+        lineAsianHigh := line.new(asianStartBar, asianHigh, bar_index, asianHigh, 
+                                  color=colorAsianHigh, width=kzLineWidth, style=line.style_dotted)
+        lineAsianLow := line.new(asianStartBar, asianLow, bar_index, asianLow, 
+                                 color=colorAsianLow, width=kzLineWidth, style=line.style_dotted)
+    else
+        line.set_y1(lineAsianHigh, asianHigh)
+        line.set_y2(lineAsianHigh, asianHigh)
+        line.set_x2(lineAsianHigh, bar_index)
+        line.set_y1(lineAsianLow, asianLow)
+        line.set_y2(lineAsianLow, asianLow)
+        line.set_x2(lineAsianLow, bar_index)
+    
+    // Labels
+    if showKZLabels
+        if not na(labelAsianHigh)
+            label.delete(labelAsianHigh)
+        if not na(labelAsianLow)
+            label.delete(labelAsianLow)
+        
+        labelAsianHigh := label.new(bar_index, asianHigh, "Asia H", 
+                                    style=label.style_label_left, 
+                                    color=color.new(color.black, 100), 
+                                    textcolor=colorAsianHigh, 
+                                    size=size.tiny)
+        labelAsianLow := label.new(bar_index, asianLow, "Asia L", 
+                                   style=label.style_label_left, 
+                                   color=color.new(color.black, 100), 
+                                   textcolor=colorAsianLow, 
+                                   size=size.tiny)
+
+// London Session Lines
+if showLondonKZ and not na(londonKZHigh) and not na(londonKZStartBar)
+    if na(lineLondonKZHigh)
+        lineLondonKZHigh := line.new(londonKZStartBar, londonKZHigh, bar_index, londonKZHigh, 
+                                     color=colorLondonHigh, width=kzLineWidth, style=line.style_dotted)
+        lineLondonKZLow := line.new(londonKZStartBar, londonKZLow, bar_index, londonKZLow, 
+                                    color=colorLondonLow, width=kzLineWidth, style=line.style_dotted)
+    else
+        line.set_y1(lineLondonKZHigh, londonKZHigh)
+        line.set_y2(lineLondonKZHigh, londonKZHigh)
+        line.set_x2(lineLondonKZHigh, bar_index)
+        line.set_y1(lineLondonKZLow, londonKZLow)
+        line.set_y2(lineLondonKZLow, londonKZLow)
+        line.set_x2(lineLondonKZLow, bar_index)
+    
+    // Labels
+    if showKZLabels
+        if not na(labelLondonKZHigh)
+            label.delete(labelLondonKZHigh)
+        if not na(labelLondonKZLow)
+            label.delete(labelLondonKZLow)
+        
+        labelLondonKZHigh := label.new(bar_index, londonKZHigh, "LDN H", 
+                                       style=label.style_label_left, 
+                                       color=color.new(color.black, 100), 
+                                       textcolor=colorLondonHigh, 
+                                       size=size.tiny)
+        labelLondonKZLow := label.new(bar_index, londonKZLow, "LDN L", 
+                                      style=label.style_label_left, 
+                                      color=color.new(color.black, 100), 
+                                      textcolor=colorLondonLow, 
+                                      size=size.tiny)
+
+// New York Session Lines
+if showNYKZ and not na(nyKZHigh) and not na(nyKZStartBar)
+    if na(lineNYKZHigh)
+        lineNYKZHigh := line.new(nyKZStartBar, nyKZHigh, bar_index, nyKZHigh, 
+                                 color=colorNYHigh, width=kzLineWidth, style=line.style_dotted)
+        lineNYKZLow := line.new(nyKZStartBar, nyKZLow, bar_index, nyKZLow, 
+                                color=colorNYLow, width=kzLineWidth, style=line.style_dotted)
+    else
+        line.set_y1(lineNYKZHigh, nyKZHigh)
+        line.set_y2(lineNYKZHigh, nyKZHigh)
+        line.set_x2(lineNYKZHigh, bar_index)
+        line.set_y1(lineNYKZLow, nyKZLow)
+        line.set_y2(lineNYKZLow, nyKZLow)
+        line.set_x2(lineNYKZLow, bar_index)
+    
+    // Labels
+    if showKZLabels
+        if not na(labelNYKZHigh)
+            label.delete(labelNYKZHigh)
+        if not na(labelNYKZLow)
+            label.delete(labelNYKZLow)
+        
+        labelNYKZHigh := label.new(bar_index, nyKZHigh, "NY H", 
+                                   style=label.style_label_left, 
+                                   color=color.new(color.black, 100), 
+                                   textcolor=colorNYHigh, 
+                                   size=size.tiny)
+        labelNYKZLow := label.new(bar_index, nyKZLow, "NY L", 
+                                  style=label.style_label_left, 
+                                  color=color.new(color.black, 100), 
+                                  textcolor=colorNYLow, 
+                                  size=size.tiny)
 
 //═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
 // ANCHORED VWAP CALCULATION
@@ -467,13 +1206,40 @@ if isSessionStart
     array.clear(upTargetLabels)
     array.clear(downTargetLabels)
     
-    // Clear FVG boxes
+    // Clear FVG boxes at session start
     for fvgBox in fvgBoxes
         box.delete(fvgBox)
     array.clear(fvgBoxes)
     array.clear(fvgHighs)
     array.clear(fvgLows)
     array.clear(fvgBullish)
+    array.clear(fvgStartBars)
+    
+    // Clear iFVG boxes
+    for ifvgBox in ifvgBoxes
+        box.delete(ifvgBox)
+    array.clear(ifvgBoxes)
+    array.clear(ifvgHighs)
+    array.clear(ifvgLows)
+    array.clear(ifvgBullish)
+    array.clear(ifvgStartBars)
+    
+    // Clear S/D zones at session start (optional - keep relevant zones)
+    for sBox in supplyBoxes
+        box.delete(sBox)
+    array.clear(supplyBoxes)
+    array.clear(supplyHighs)
+    array.clear(supplyLows)
+    array.clear(supplyStartBars)
+    array.clear(supplyTouches)
+    
+    for dBox in demandBoxes
+        box.delete(dBox)
+    array.clear(demandBoxes)
+    array.clear(demandHighs)
+    array.clear(demandLows)
+    array.clear(demandStartBars)
+    array.clear(demandTouches)
 
 // Timeframe-aware bar calculation
 float tfMinutes = timeframe.in_seconds() / 60
@@ -549,6 +1315,58 @@ if validBreakoutDown
     breakoutPrice := close
 
 //═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// ZONE TOUCH DETECTION FOR ENTRIES
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+isTouchingBullishFVG() =>
+    bool touching = false
+    if array.size(fvgBoxes) > 0
+        for i = 0 to array.size(fvgBoxes) - 1
+            if i < array.size(fvgBoxes) and array.get(fvgBullish, i) == true
+                float fvgH = array.get(fvgHighs, i)
+                float fvgL = array.get(fvgLows, i)
+                if low <= fvgH and high >= fvgL
+                    touching := true
+                    break
+    touching
+
+isTouchingBearishFVG() =>
+    bool touching = false
+    if array.size(fvgBoxes) > 0
+        for i = 0 to array.size(fvgBoxes) - 1
+            if i < array.size(fvgBoxes) and array.get(fvgBullish, i) == false
+                float fvgH = array.get(fvgHighs, i)
+                float fvgL = array.get(fvgLows, i)
+                if low <= fvgH and high >= fvgL
+                    touching := true
+                    break
+    touching
+
+isTouchingDemandZone() =>
+    bool touching = false
+    if array.size(demandBoxes) > 0
+        for i = 0 to array.size(demandBoxes) - 1
+            if i < array.size(demandBoxes)
+                float zH = array.get(demandHighs, i)
+                float zL = array.get(demandLows, i)
+                if low <= zH and low >= zL
+                    touching := true
+                    break
+    touching
+
+isTouchingSupplyZone() =>
+    bool touching = false
+    if array.size(supplyBoxes) > 0
+        for i = 0 to array.size(supplyBoxes) - 1
+            if i < array.size(supplyBoxes)
+                float zH = array.get(supplyHighs, i)
+                float zL = array.get(supplyLows, i)
+                if high >= zL and high <= zH
+                    touching := true
+                    break
+    touching
+
+//═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
 // RETEST ENTRY SIGNALS
 //═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
@@ -561,37 +1379,28 @@ bool retestHighBullish = broke30High and
                          (isBullishEngulfing() or (isBullishMomentum() and isTouchingBullishFVG()))
 
 // Retest of 30min Low after breakout (bearish continuation)
-bool retestLowBearish = broke30Low and 
-                        bar_index > breakoutBar + 1 and
-                        high >= orb30Low and 
-                        high <= orb30Low + (orb30Range * 0.15) and
-                        close < orb30Low and
-                        (isBearishEngulfing() or (isBearishMomentum() and isTouchingBearishFVG()))
+bool retestLowBearish = broke30Low and bar_index > breakoutBar + 1 and high >= orb30Low and high <= orb30Low + (orb30Range * 0.15) and close < orb30Low and (isBearishEngulfing() or (isBearishMomentum() and isTouchingBearishFVG()))
 
-// FVG + Engulfing combo entries (highest probability)
+// FVG + Engulfing combo entries
 bool fvgBullishEntry = isTouchingBullishFVG() and isBullishEngulfing() and close > orb30Low
 bool fvgBearishEntry = isTouchingBearishFVG() and isBearishEngulfing() and close < orb30High
 
+// S/D Zone entries
+bool demandZoneEntry = isTouchingDemandZone() and isBullishEngulfing()
+bool supplyZoneEntry = isTouchingSupplyZone() and isBearishEngulfing()
+
 //═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
-// FAKEOUT DETECTION
+// FAKEOUT & ABSORPTION DETECTION
 //═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
-// Fakeout warning: broke level but reversed back into range
-bool fakeoutUpWarning = broke30High and 
-                        bar_index > breakoutBar and
-                        close < orb30Mid and
-                        isBearishMomentum()
+bool fakeoutUpWarning = broke30High and  bar_index > breakoutBar and close < orb30Mid and isBearishMomentum()
 
 bool fakeoutDownWarning = broke30Low and 
                           bar_index > breakoutBar and
                           close > orb30Mid and
                           isBullishMomentum()
 
-// Absorption detection (long wicks at levels = institutional absorption)
-bool absorptionAtHigh = orb30Complete and 
-                        high >= orb30High - (orb30Range * 0.05) and
-                        isShootingStar() and
-                        isHighVolume
+bool absorptionAtHigh = orb30Complete and high >= orb30High - (orb30Range * 0.05) and isShootingStar() and isHighVolume
 
 bool absorptionAtLow = orb30Complete and 
                        low <= orb30Low + (orb30Range * 0.05) and
@@ -773,6 +1582,33 @@ if isSessionEnd
     array.clear(fvgHighs)
     array.clear(fvgLows)
     array.clear(fvgBullish)
+    array.clear(fvgStartBars)
+    
+    // Clean up iFVG boxes
+    for ifvgBox in ifvgBoxes
+        box.delete(ifvgBox)
+    array.clear(ifvgBoxes)
+    array.clear(ifvgHighs)
+    array.clear(ifvgLows)
+    array.clear(ifvgBullish)
+    array.clear(ifvgStartBars)
+    
+    // Clean up S/D zones
+    for sBox in supplyBoxes
+        box.delete(sBox)
+    array.clear(supplyBoxes)
+    array.clear(supplyHighs)
+    array.clear(supplyLows)
+    array.clear(supplyStartBars)
+    array.clear(supplyTouches)
+    
+    for dBox in demandBoxes
+        box.delete(dBox)
+    array.clear(demandBoxes)
+    array.clear(demandHighs)
+    array.clear(demandLows)
+    array.clear(demandStartBars)
+    array.clear(demandTouches)
 
 //═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
 // PLOT SIGNALS
@@ -784,17 +1620,23 @@ plotshape(showConfirmationSignals and validBreakoutUp, "Breakout Up", shape.tria
 plotshape(showConfirmationSignals and validBreakoutDown, "Breakout Down", shape.triangledown, location.abovebar, 
           colorBearishConfirm, size=size.normal, text="ORB↓", textcolor=colorBearishConfirm)
 
-// Retest entry signals (higher probability)
+// Retest entry signals
 plotshape(showRetestSignals and retestHighBullish, "Retest Long", shape.labelup, location.belowbar, 
           color.new(colorBullishConfirm, 0), size=size.small, text="RT↑", textcolor=color.white)
 plotshape(showRetestSignals and retestLowBearish, "Retest Short", shape.labeldown, location.abovebar, 
           color.new(colorBearishConfirm, 0), size=size.small, text="RT↓", textcolor=color.white)
 
-// FVG + Engulfing combo (premium entries)
+// FVG + Engulfing combo
 plotshape(showRetestSignals and fvgBullishEntry and not retestHighBullish, "FVG Long", shape.diamond, location.belowbar, 
           color.new(#00BCD4, 0), size=size.tiny, text="FVG↑", textcolor=color.new(#00BCD4, 0))
 plotshape(showRetestSignals and fvgBearishEntry and not retestLowBearish, "FVG Short", shape.diamond, location.abovebar, 
           color.new(#00BCD4, 0), size=size.tiny, text="FVG↓", textcolor=color.new(#00BCD4, 0))
+
+// S/D Zone entries
+plotshape(showRetestSignals and demandZoneEntry and not fvgBullishEntry, "Demand Entry", shape.circle, location.belowbar, 
+          colorDemandZone, size=size.tiny, text="D↑", textcolor=colorDemandZone)
+plotshape(showRetestSignals and supplyZoneEntry and not fvgBearishEntry, "Supply Entry", shape.circle, location.abovebar, 
+          colorSupplyZone, size=size.tiny, text="S↓", textcolor=colorSupplyZone)
 
 // Absorption warnings
 plotshape(absorptionAtHigh, "Absorption High", shape.xcross, location.abovebar, 
@@ -824,60 +1666,105 @@ plot(showVWAP and isActiveSession ? vwap : na, "Anchored VWAP", color=vwapColor,
 // INFO TABLE
 //═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
-var table infoTable = table.new(position.top_right, 2, 9, border_width=1)
+var table infoTable = table.new(position.top_right, 2, 15, border_width=1)
 
-if isActiveSession and orb30Complete
-    table.cell(infoTable, 0, 0, "SNIPER ORB V4", text_color=color.white, bgcolor=color.new(#673AB7, 20), text_size=size.small)
-    table.cell(infoTable, 1, 0, sessionType, text_color=color.white, bgcolor=color.new(#673AB7, 20), text_size=size.small)
+if barstate.islast
+    // Header
+    table.cell(infoTable, 0, 0, "SNIPER ORB V4.3", text_color=color.white, bgcolor=color.new(#673AB7, 20), text_size=size.small)
+    string activeKZ = inAsian ? "ASIA" : inLondonKZ ? "LDN" : inNYKZ ? "NY" : "—"
+    table.cell(infoTable, 1, 0, activeKZ, text_color=color.white, bgcolor=color.new(#673AB7, 20), text_size=size.small)
     
-    table.cell(infoTable, 0, 1, "5m Range", text_color=color5minColor, text_size=size.tiny)
-    table.cell(infoTable, 1, 1, str.tostring(orb5High - orb5Low, format.mintick), text_color=color.white, text_size=size.tiny)
+    // Killzone Ranges
+    string asiaRange = not na(asianHigh) and not na(asianLow) ? str.tostring(asianHigh - asianLow, format.mintick) : "—"
+    table.cell(infoTable, 0, 1, "Asia Range", text_color=colorAsianHigh, text_size=size.tiny)
+    table.cell(infoTable, 1, 1, asiaRange, text_color=color.white, text_size=size.tiny)
     
-    table.cell(infoTable, 0, 2, "15m Range", text_color=color15minColor, text_size=size.tiny)
-    table.cell(infoTable, 1, 2, str.tostring(orb15High - orb15Low, format.mintick), text_color=color.white, text_size=size.tiny)
+    string ldnRange = not na(londonKZHigh) and not na(londonKZLow) ? str.tostring(londonKZHigh - londonKZLow, format.mintick) : "—"
+    table.cell(infoTable, 0, 2, "LDN Range", text_color=colorLondonHigh, text_size=size.tiny)
+    table.cell(infoTable, 1, 2, ldnRange, text_color=color.white, text_size=size.tiny)
     
-    table.cell(infoTable, 0, 3, "30m Range", text_color=color30minColor, text_size=size.tiny)
-    table.cell(infoTable, 1, 3, str.tostring(orb30Range, format.mintick), text_color=color.white, text_size=size.tiny)
+    string nyRange = not na(nyKZHigh) and not na(nyKZLow) ? str.tostring(nyKZHigh - nyKZLow, format.mintick) : "—"
+    table.cell(infoTable, 0, 3, "NY Range", text_color=colorNYHigh, text_size=size.tiny)
+    table.cell(infoTable, 1, 3, nyRange, text_color=color.white, text_size=size.tiny)
     
-    table.cell(infoTable, 0, 4, "VWAP", text_color=vwapColor, text_size=size.tiny)
-    table.cell(infoTable, 1, 4, str.tostring(vwap, format.mintick), text_color=color.white, text_size=size.tiny)
+    // ORB info (only if session active and ORB complete)
+    if isActiveSession and orb30Complete
+        table.cell(infoTable, 0, 4, "30m ORB", text_color=color30minColor, text_size=size.tiny)
+        table.cell(infoTable, 1, 4, str.tostring(orb30Range, format.mintick), text_color=color.white, text_size=size.tiny)
+        
+        table.cell(infoTable, 0, 5, "VWAP", text_color=vwapColor, text_size=size.tiny)
+        table.cell(infoTable, 1, 5, str.tostring(vwap, format.mintick), text_color=color.white, text_size=size.tiny)
+        
+        // Breakout status
+        string bkStatus = broke30High ? "🔼 BROKE HIGH" : broke30Low ? "🔽 BROKE LOW" : "📊 IN RANGE"
+        color bkColor = broke30High ? colorBullishConfirm : broke30Low ? colorBearishConfirm : color.yellow
+        table.cell(infoTable, 0, 6, "Status", text_color=color.gray, text_size=size.tiny)
+        table.cell(infoTable, 1, 6, bkStatus, text_color=bkColor, text_size=size.tiny)
+    else
+        table.cell(infoTable, 0, 4, "30m ORB", text_color=color30minColor, text_size=size.tiny)
+        table.cell(infoTable, 1, 4, "—", text_color=color.gray, text_size=size.tiny)
+        table.cell(infoTable, 0, 5, "VWAP", text_color=vwapColor, text_size=size.tiny)
+        table.cell(infoTable, 1, 5, "—", text_color=color.gray, text_size=size.tiny)
+        table.cell(infoTable, 0, 6, "Status", text_color=color.gray, text_size=size.tiny)
+        table.cell(infoTable, 1, 6, "—", text_color=color.gray, text_size=size.tiny)
     
-    // Breakout status
-    string bkStatus = broke30High ? "🔼 BROKE HIGH" : broke30Low ? "🔽 BROKE LOW" : "📊 IN RANGE"
-    color bkColor = broke30High ? colorBullishConfirm : broke30Low ? colorBearishConfirm : color.yellow
-    table.cell(infoTable, 0, 5, "Status", text_color=color.gray, text_size=size.tiny)
-    table.cell(infoTable, 1, 5, bkStatus, text_color=bkColor, text_size=size.tiny)
+    // ATR for volatility context
+    table.cell(infoTable, 0, 7, "ATR(14)", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 7, str.tostring(atrValue, format.mintick), text_color=isHighVolatility ? color.orange : color.white, text_size=size.tiny)
     
     // Volume status
     string volStatus = isHighVolume ? "✓ HIGH VOL" : "○ Normal"
-    table.cell(infoTable, 0, 6, "Volume", text_color=color.gray, text_size=size.tiny)
-    table.cell(infoTable, 1, 6, volStatus, text_color=isHighVolume ? color.green : color.gray, text_size=size.tiny)
+    table.cell(infoTable, 0, 8, "Volume", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 8, volStatus, text_color=isHighVolume ? color.green : color.gray, text_size=size.tiny)
     
     // Body strength
     string bodyStatus = bodyPercent >= 70 ? "💪 STRONG" : bodyPercent >= 50 ? "○ Normal" : "⚠️ Weak"
-    table.cell(infoTable, 0, 7, "Body", text_color=color.gray, text_size=size.tiny)
-    table.cell(infoTable, 1, 7, bodyStatus, text_color=bodyPercent >= 70 ? color.green : bodyPercent >= 50 ? color.gray : color.orange, text_size=size.tiny)
+    table.cell(infoTable, 0, 9, "Body", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 9, bodyStatus, text_color=bodyPercent >= 70 ? color.green : bodyPercent >= 50 ? color.gray : color.orange, text_size=size.tiny)
     
-    // FVG count
-    table.cell(infoTable, 0, 8, "FVGs", text_color=color.gray, text_size=size.tiny)
-    table.cell(infoTable, 1, 8, str.tostring(array.size(fvgBoxes)), text_color=color.white, text_size=size.tiny)
-else
-    table.clear(infoTable, 0, 0, 1, 8)
+    // Zone counts
+    table.cell(infoTable, 0, 10, "FVGs", text_color=color.gray, text_size=size.tiny)
+    table.cell(infoTable, 1, 10, str.tostring(array.size(fvgBoxes)) + " / " + str.tostring(array.size(ifvgBoxes)) + " iFVG", text_color=color.white, text_size=size.tiny)
+    
+    table.cell(infoTable, 0, 11, "Supply", text_color=colorSupplyZone, text_size=size.tiny)
+    table.cell(infoTable, 1, 11, str.tostring(array.size(supplyBoxes)), text_color=color.white, text_size=size.tiny)
+    
+    table.cell(infoTable, 0, 12, "Demand", text_color=colorDemandZone, text_size=size.tiny)
+    table.cell(infoTable, 1, 12, str.tostring(array.size(demandBoxes)), text_color=color.white, text_size=size.tiny)
 
 //═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
 // ALERTS
 //═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
-alertcondition(validBreakoutUp, "ORB Breakout Up", "SNIPER ORB V4: Confirmed breakout above 30m ORB High")
-alertcondition(validBreakoutDown, "ORB Breakout Down", "SNIPER ORB V4: Confirmed breakout below 30m ORB Low")
-alertcondition(retestHighBullish, "Retest Long Entry", "SNIPER ORB V4: Bullish retest entry at ORB High")
-alertcondition(retestLowBearish, "Retest Short Entry", "SNIPER ORB V4: Bearish retest entry at ORB Low")
-alertcondition(fvgBullishEntry, "FVG Long Entry", "SNIPER ORB V4: FVG + Engulfing bullish entry")
-alertcondition(fvgBearishEntry, "FVG Short Entry", "SNIPER ORB V4: FVG + Engulfing bearish entry")
-alertcondition(absorptionAtHigh or absorptionAtLow, "Absorption Detected", "SNIPER ORB V4: Institutional absorption at ORB level")
-alertcondition(fakeoutUpWarning or fakeoutDownWarning, "Fakeout Warning", "SNIPER ORB V4: Potential fakeout detected")
-alertcondition(orb30Complete and not orb30Complete[1], "ORB Complete", "SNIPER ORB V4: 30-minute ORB formation complete")
+// ORB Alerts
+alertcondition(validBreakoutUp, "ORB Breakout Up", "SNIPER ORB V4.3: Confirmed breakout above 30m ORB High")
+alertcondition(validBreakoutDown, "ORB Breakout Down", "SNIPER ORB V4.3: Confirmed breakout below 30m ORB Low")
+alertcondition(retestHighBullish, "Retest Long Entry", "SNIPER ORB V4.3: Bullish retest entry at ORB High")
+alertcondition(retestLowBearish, "Retest Short Entry", "SNIPER ORB V4.3: Bearish retest entry at ORB Low")
+
+// Zone Entry Alerts
+alertcondition(fvgBullishEntry, "FVG Long Entry", "SNIPER ORB V4.3: FVG + Engulfing bullish entry")
+alertcondition(fvgBearishEntry, "FVG Short Entry", "SNIPER ORB V4.3: FVG + Engulfing bearish entry")
+alertcondition(demandZoneEntry, "Demand Zone Entry", "SNIPER ORB V4.3: Bullish entry at Demand Zone")
+alertcondition(supplyZoneEntry, "Supply Zone Entry", "SNIPER ORB V4.3: Bearish entry at Supply Zone")
+
+// Warning Alerts
+alertcondition(absorptionAtHigh or absorptionAtLow, "Absorption Detected", "SNIPER ORB V4.3: Institutional absorption at ORB level")
+alertcondition(fakeoutUpWarning or fakeoutDownWarning, "Fakeout Warning", "SNIPER ORB V4.3: Potential fakeout detected")
+
+// Session Alerts
+alertcondition(orb30Complete and not orb30Complete[1], "ORB Complete", "SNIPER ORB V4.3: 30-minute ORB formation complete")
+alertcondition(isHighVolatility, "High Volatility", "SNIPER ORB V4.3: Volatility expansion detected")
+
+// Killzone Session Alerts
+alertcondition(asianStart, "Asian Session Start", "SNIPER ORB V4.3: Asian session started (6:00 PM EST)")
+alertcondition(asianEnd, "Asian Session End", "SNIPER ORB V4.3: Asian session ended (2:59 AM EST)")
+alertcondition(londonKZStart, "London Session Start", "SNIPER ORB V4.3: London session started (3:00 AM EST)")
+alertcondition(londonKZEnd, "London Session End", "SNIPER ORB V4.3: London session ended (9:29 AM EST)")
+alertcondition(nyKZStart, "New York Session Start", "SNIPER ORB V4.3: New York session started (9:30 AM EST)")
+alertcondition(nyKZEnd, "New York Session End", "SNIPER ORB V4.3: New York session ended (5:00 PM EST)")
+alertcondition(isDailyReset, "Daily Reset", "SNIPER ORB V4.3: Daily reset at 6:00 PM EST (Globex open)")
 
 //═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
-// END OF SNIPER ORB V4
+// END OF SNIPER ORB V4.3 - ENHANCED ZONE MANAGEMENT
 //═══════════════════════════════════════════════════════════════════════════════════════════════════════════════
