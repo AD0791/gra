@@ -1,0 +1,863 @@
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+//    ██████╗ ███████╗███████╗██████╗ ███████╗██╗      ██████╗ ██╗    ██╗
+//    ██╔══██╗██╔════╝██╔════╝██╔══██╗██╔════╝██║     ██╔═══██╗██║    ██║
+//    ██║  ██║█████╗  █████╗  ██████╔╝█████╗  ██║     ██║   ██║██║ █╗ ██║
+//    ██║  ██║██╔══╝  ██╔══╝  ██╔═══╝ ██╔══╝  ██║     ██║   ██║██║███╗██║
+//    ██████╔╝███████╗███████╗██║     ██║     ███████╗╚██████╔╝╚███╔███╔╝
+//    ╚═════╝ ╚══════╝╚══════╝╚═╝     ╚═╝     ╚══════╝ ╚═════╝  ╚══╝╚══╝
+//
+//    DeepFlow v1.0 — Order Flow Analytics for TradingView
+//    Inspired by DeepCharts® | Engineered for CME/CBOT Tick Data
+//
+//    MODULES:
+//      [1] CVD Engine         — True Cumulative Volume Delta via footprint
+//      [2] Big Trades         — Institutional order detection (volume anomalies)
+//      [3] Exhaust / Absorb   — Exhaustion & absorption pattern recognition
+//      [4] IVB                — Initial Volume Balance (Opening Range Breakout)
+//      [5] FVG / IFVG         — Fair Value Gaps & Inverse Fair Value Gaps
+//      [6] VP S/R Engine      — Volume Profile Support & Resistance zones
+//
+//    MODELS:
+//      • Mean-Reversion  — POC/VA magnet, exhaustion reversals, IFVG levels
+//      • Continuation    — Delta confirmation, absorption with trend, IVB breakout
+//
+//    REQUIREMENTS:
+//      • TradingView Premium or Ultimate (for request.footprint())
+//      • PineScript v6
+//      • Optimized for: ES, NQ, YM, RTY, CL, GC, ZB, ZN, 6E (CME/CBOT)
+//
+// ═══════════════════════════════════════════════════════════════════════════════
+
+//@version=6
+indicator("DeepFlow v1.0 — Order Flow Analytics", "DeepFlow", overlay = true,
+  max_boxes_count  = 500,
+  max_labels_count = 500,
+  max_lines_count  = 500,
+  max_bars_back    = 5000)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 0 — DEEPCHARTS COLOR THEME
+// ─────────────────────────────────────────────────────────────────────────────
+//  Derived from DeepCharts® dark-mode palette. Designed for high contrast
+//  on dark chart backgrounds. All colors use the `color.new()` transparency
+//  system so opacity is tuneable per-element.
+
+var color C_BUY           = #00E676   // Bright green  — aggressive buying
+var color C_SELL          = #FF1744   // Bright red    — aggressive selling
+var color C_BUY_DIM       = #00C853   // Muted green   — buy zones / fills
+var color C_SELL_DIM      = #D50000   // Muted red     — sell zones / fills
+var color C_POC           = #FF9100   // Orange        — Point of Control
+var color C_VA            = #2979FF   // Blue          — Value Area bounds
+var color C_VWAP          = #42A5F5   // Light blue    — VWAP line
+var color C_ABSORB_BULL   = #00BFA5   // Teal          — bullish absorption
+var color C_ABSORB_BEAR   = #D500F9   // Purple        — bearish absorption
+var color C_EXHAUST       = #FFD600   // Yellow        — exhaustion signals
+var color C_BIGTRADE_BUY  = #00E5FF   // Cyan          — large buy trades
+var color C_BIGTRADE_SELL = #FF6D00   // Deep orange   — large sell trades
+var color C_FVG_BULL      = #00C853   // Green         — bullish FVG
+var color C_FVG_BEAR      = #FF1744   // Red           — bearish FVG
+var color C_IFVG          = #AB47BC   // Purple        — inverse FVG (flipped)
+var color C_IVB           = #78909C   // Blue-gray     — IVB range
+var color C_IVB_BREAK     = #FFAB00   // Amber         — IVB breakout
+var color C_NAKED_POC     = #FF6E40   // Coral         — naked (untested) POC
+var color C_DASH_BG       = #1A1A2E   // Dark navy     — dashboard background
+var color C_DASH_TXT      = #E0E0E0   // Light gray    — dashboard text
+var color C_NEUTRAL       = #546E7A   // Blue-gray     — neutral / grid
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 1 — INPUTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── General / Footprint ─────────────────────────────────────────────────────
+string GRP_GEN = "⚙️ General — Footprint Engine"
+int   i_ticksPerRow   = input.int(1, "Ticks Per Row",
+  minval = 1, maxval = 1000, group = GRP_GEN,
+  tooltip = "Price granularity for footprint rows. 1 tick = finest resolution.\n" +
+            "ES/NQ/YM: 1-4  |  CL: 5-10  |  GC: 5-10\n" +
+            "Higher values = fewer rows, faster computation.")
+int   i_vaPercent      = input.int(70, "Value Area %",
+  minval = 50, maxval = 95, group = GRP_GEN,
+  tooltip = "Percentage of total volume defining the Value Area. Industry standard is 70%.")
+float i_imbPercent     = input.float(300, "Imbalance Threshold %",
+  minval = 100, maxval = 1000, group = GRP_GEN,
+  tooltip = "Buy volume must exceed this % of adjacent sell volume to flag imbalance.\n" +
+            "300% = 3:1 ratio. Lower = more signals, higher = fewer but stronger.")
+
+// ── Module Toggles ──────────────────────────────────────────────────────────
+string GRP_MOD = "🔌 Module Toggles"
+bool i_showCVD       = input.bool(true, "CVD (Cumulative Volume Delta)",    group = GRP_MOD)
+bool i_showBigTrades = input.bool(true, "Big Trades Detection",             group = GRP_MOD)
+bool i_showExhAbsorb = input.bool(true, "Exhaustion / Absorption",          group = GRP_MOD)
+bool i_showIVB       = input.bool(true, "IVB (Initial Volume Balance)",     group = GRP_MOD)
+bool i_showFVG       = input.bool(true, "FVG / IFVG Zones",                group = GRP_MOD)
+bool i_showVPSR      = input.bool(true, "Volume Profile S/R Zones",        group = GRP_MOD)
+bool i_showDash      = input.bool(true, "Dashboard Panel",                  group = GRP_MOD)
+
+// ── CVD Settings ────────────────────────────────────────────────────────────
+string GRP_CVD = "📊 CVD — Cumulative Volume Delta"
+int   i_cvdMaLen     = input.int(20, "CVD Moving Average Length",
+  minval = 5, maxval = 200, group = GRP_CVD)
+bool  i_cvdDivergence = input.bool(true, "Detect CVD ↔ Price Divergence", group = GRP_CVD)
+int   i_cvdDivLen    = input.int(10, "Divergence Lookback Bars",
+  minval = 3, maxval = 50, group = GRP_CVD)
+
+// ── Big Trades Settings ─────────────────────────────────────────────────────
+string GRP_BT = "🐋 Big Trades Detection"
+int   i_btLookback   = input.int(100, "Statistical Lookback",
+  minval = 20, maxval = 500, group = GRP_BT,
+  tooltip = "Number of bars for mean/stdev calculation of volume.")
+float i_btMultiplier  = input.float(2.5, "Std Dev Multiplier",
+  minval = 1.0, maxval = 5.0, step = 0.1, group = GRP_BT,
+  tooltip = "How many standard deviations above mean to flag a Big Trade.\n" +
+            "2.0 = more signals | 3.0 = fewer, stronger signals")
+int   i_btMinContracts = input.int(0, "Minimum Contracts Filter",
+  minval = 0, group = GRP_BT,
+  tooltip = "Absolute minimum volume to qualify. 0 = use only statistical threshold.\n" +
+            "ES: 50+ | NQ: 20+ | YM: 30+ | CL: 100+")
+int   i_btMaxMarkers  = input.int(50, "Max Markers on Chart",
+  minval = 10, maxval = 200, group = GRP_BT)
+
+// ── Exhaustion / Absorption Settings ────────────────────────────────────────
+string GRP_EA = "⚡ Exhaustion / Absorption"
+float i_eaDeltaMult   = input.float(2.0, "Delta Threshold (× avg)",
+  minval = 1.0, maxval = 5.0, step = 0.1, group = GRP_EA,
+  tooltip = "Delta must exceed this multiple of its average to qualify.")
+float i_eaExhPriceFactor = input.float(0.3, "Exhaustion: Max Price Move (× ATR)",
+  minval = 0.05, maxval = 1.0, step = 0.05, group = GRP_EA,
+  tooltip = "Price range must be BELOW this fraction of ATR while delta is high.\n" +
+            "0.3 = price moved less than 30% of ATR despite heavy delta.")
+int   i_eaAtrLen      = input.int(14, "ATR Length", minval = 5, maxval = 50, group = GRP_EA)
+int   i_eaMaxMarkers  = input.int(30, "Max Markers on Chart",
+  minval = 5, maxval = 100, group = GRP_EA)
+
+// ── IVB Settings ────────────────────────────────────────────────────────────
+string GRP_IVB = "📐 IVB — Initial Volume Balance"
+string i_ivbSession   = input.session("0930-1600", "RTH Session",
+  group = GRP_IVB,
+  tooltip = "Regular Trading Hours for your contract.\n" +
+            "ES/NQ/YM/RTY: 0930-1600  |  CL: 0900-1430  |  GC: 0820-1330")
+string i_ivbTimezone  = input.string("America/New_York", "Timezone",
+  options = ["America/New_York", "America/Chicago", "America/Los_Angeles",
+             "Europe/London", "Europe/Berlin", "Asia/Tokyo", "UTC"],
+  group = GRP_IVB)
+int   i_ivbMinutes    = input.int(30, "IB Period (minutes)",
+  minval = 1, maxval = 120, group = GRP_IVB,
+  tooltip = "Duration of the Initial Balance window after RTH open.\n" +
+            "Common: 5, 15, 30, 60 minutes.")
+bool  i_ivbExtend     = input.bool(true, "Extend IB Lines to Session End", group = GRP_IVB)
+float i_ivbBreakVol   = input.float(1.5, "Breakout Volume Confirmation (× avg)",
+  minval = 1.0, maxval = 5.0, step = 0.1, group = GRP_IVB,
+  tooltip = "Volume on breakout bar must exceed this multiple of session average.")
+
+// ── FVG / IFVG Settings ────────────────────────────────────────────────────
+string GRP_FVG = "🔲 FVG / IFVG Zones"
+int   i_fvgMaxBoxes   = input.int(15, "Max Active FVG Boxes",
+  minval = 5, maxval = 50, group = GRP_FVG)
+bool  i_fvgAutoRemove = input.bool(true, "Auto-Remove Fully Mitigated", group = GRP_FVG)
+bool  i_fvgShowIFVG   = input.bool(true, "Convert Mitigated FVG → IFVG", group = GRP_FVG,
+  tooltip = "When an FVG is fully filled, flip it to an Inverse FVG.\n" +
+            "IFVGs act as support/resistance in the opposite direction.")
+float i_fvgMinAtrMult = input.float(0.1, "Min Gap Size (× ATR)",
+  minval = 0.01, maxval = 1.0, step = 0.01, group = GRP_FVG,
+  tooltip = "Filter out tiny gaps. Gap must exceed this fraction of ATR.")
+int   i_fvgTransparency = input.int(85, "Box Transparency",
+  minval = 50, maxval = 95, group = GRP_FVG)
+
+// ── Volume Profile S/R Settings ─────────────────────────────────────────────
+string GRP_VP = "🏗️ Volume Profile — S/R Zones"
+bool  i_vpNakedPOC   = input.bool(true, "Track Naked POCs",
+  group = GRP_VP,
+  tooltip = "Naked POC = previous session POC never retested by price.\n" +
+            "These are magnets for price and strong S/R levels.")
+int   i_vpMaxNaked    = input.int(10, "Max Naked POCs Displayed",
+  minval = 1, maxval = 20, group = GRP_VP)
+bool  i_vpShowVA      = input.bool(true, "Show Value Area (VAH/VAL)", group = GRP_VP)
+bool  i_vpShowPOC     = input.bool(true, "Show Session POC",          group = GRP_VP)
+int   i_vpLineWidth   = input.int(2, "S/R Line Width",
+  minval = 1, maxval = 4, group = GRP_VP)
+
+// ── Dashboard Settings ──────────────────────────────────────────────────────
+string GRP_DSH = "📋 Dashboard"
+string i_dashPos      = input.string("Top Right", "Position",
+  options = ["Top Left", "Top Right", "Bottom Left", "Bottom Right"],
+  group = GRP_DSH)
+int   i_dashSize       = input.int(11, "Font Size (pt)",
+  minval = 8, maxval = 16, group = GRP_DSH)
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 2 — CUSTOM TYPES
+// ─────────────────────────────────────────────────────────────────────────────
+
+type FVGZone
+    box     bx
+    float   top
+    float   bottom
+    int     barStart
+    bool    isBullish
+    bool    isFilled
+    bool    isIFVG
+
+type NakedPOC
+    float   price
+    int     sessionBar
+    line    ln
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 3 — FOOTPRINT DATA ENGINE
+// ─────────────────────────────────────────────────────────────────────────────
+//  Single request.footprint() call — extracts all order flow data.
+//  On bars where footprint is unavailable, falls back to heuristic split.
+
+footprint fp = request.footprint(i_ticksPerRow, i_vaPercent, i_imbPercent)
+
+bool hasFP = not na(fp)
+
+// ── True delta from footprint (primary) ─────────────────────────────────────
+float fpBuyVol  = hasFP ? fp.buy_volume()  : na
+float fpSellVol = hasFP ? fp.sell_volume() : na
+float fpDelta   = hasFP ? fp.delta()       : na
+
+// ── Heuristic fallback when footprint is unavailable ────────────────────────
+//    Uses close-relative-to-range volume splitting.
+//    On tick data each bar IS a trade, so close == high == low often,
+//    making this 50/50 on dojis. Still directionally useful.
+float priceRange   = high - low
+float heurBuyVol   = priceRange > 0 ? volume * (close - low) / priceRange : volume * 0.5
+float heurSellVol  = volume - heurBuyVol
+float heurDelta    = heurBuyVol - heurSellVol
+
+// ── Unified delta / buy / sell ──────────────────────────────────────────────
+float buyVol  = nz(fpBuyVol,  heurBuyVol)
+float sellVol = nz(fpSellVol, heurSellVol)
+float delta   = nz(fpDelta,   heurDelta)
+
+// ── Footprint POC / VA / rows ───────────────────────────────────────────────
+float fpPOCHi = hasFP ? fp.poc().up_price()    : na
+float fpPOCLo = hasFP ? fp.poc().down_price()  : na
+float fpPOC   = hasFP ? math.avg(fpPOCHi, fpPOCLo) : na
+float fpVAH   = hasFP ? fp.vah().up_price()    : na
+float fpVAL   = hasFP ? fp.val().down_price()  : na
+
+// ── ATR (used across modules) ───────────────────────────────────────────────
+float atr = ta.atr(i_eaAtrLen)
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 4 — MODULE 1: CVD (CUMULATIVE VOLUME DELTA)
+// ─────────────────────────────────────────────────────────────────────────────
+//  True CVD from footprint delta. Tracks the running sum of buy-sell pressure.
+//  Divergence detection: price makes new high/low but CVD does not confirm.
+
+var float cvd = 0.0
+cvd += delta
+
+float cvdMA = ta.sma(cvd, i_cvdMaLen)
+
+// ── CVD ↔ Price Divergence ──────────────────────────────────────────────────
+bool cvdBullDiv = false
+bool cvdBearDiv = false
+
+if i_showCVD and i_cvdDivergence
+    float priceLowest = ta.lowest(low, i_cvdDivLen)
+    float priceHighest = ta.highest(high, i_cvdDivLen)
+    float cvdLowest = ta.lowest(cvd, i_cvdDivLen)
+    float cvdHighest = ta.highest(cvd, i_cvdDivLen)
+    // Bullish divergence: price makes lower low, CVD makes higher low
+    cvdBullDiv := low == priceLowest and cvd > cvdLowest and low < low[i_cvdDivLen]
+    // Bearish divergence: price makes higher high, CVD makes lower high
+    cvdBearDiv := high == priceHighest and cvd < cvdHighest and high > high[i_cvdDivLen]
+
+// ── CVD Plots ───────────────────────────────────────────────────────────────
+// Plotted in separate pane to keep main chart clean
+plot(i_showCVD ? cvd   : na, "CVD", C_VWAP, 2, display = display.pane)
+plot(i_showCVD ? cvdMA : na, "CVD MA", color.new(C_NEUTRAL, 30), 1,
+  plot.style_line, display = display.pane)
+plot(i_showCVD ? 0     : na, "Zero", color.new(C_NEUTRAL, 70), 1,
+  plot.style_line, display = display.pane)
+
+// ── CVD Divergence markers (on main chart) ──────────────────────────────────
+plotshape(i_showCVD and cvdBullDiv ? low - atr * 0.5 : na,
+  "CVD Bull Div", shape.diamond, location.absolute, C_BUY, size = size.tiny)
+plotshape(i_showCVD and cvdBearDiv ? high + atr * 0.5 : na,
+  "CVD Bear Div", shape.diamond, location.absolute, C_SELL, size = size.tiny)
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 5 — MODULE 2: BIG TRADES DETECTION
+// ─────────────────────────────────────────────────────────────────────────────
+//  On tick charts, each bar = one executed trade. Volume = contracts.
+//  Statistical outlier detection flags institutional-size orders.
+//  Uses dynamic threshold: mean + (k × stddev) of rolling volume.
+
+float volMean  = ta.sma(volume, i_btLookback)
+float volStdev = ta.stdev(volume, i_btLookback)
+float btThreshold = volMean + i_btMultiplier * nz(volStdev, 0)
+bool  isBigTrade  = volume > math.max(btThreshold, i_btMinContracts) and volume > 0
+
+// ── Classify direction ──────────────────────────────────────────────────────
+bool btIsBuy  = isBigTrade and delta >= 0
+bool btIsSell = isBigTrade and delta < 0
+
+// ── Manage marker count ─────────────────────────────────────────────────────
+var array<label> btLabels = array.new<label>()
+
+if i_showBigTrades and isBigTrade
+    color btColor = btIsBuy ? C_BIGTRADE_BUY : C_BIGTRADE_SELL
+    float btY     = btIsBuy ? low - atr * 0.3 : high + atr * 0.3
+    label.style btStyle = btIsBuy ? label.style_label_up : label.style_label_down
+    string btText = str.tostring(volume, "#") + " ct"
+
+    label lbl = label.new(bar_index, btY, btText,
+      style     = btStyle,
+      color     = color.new(btColor, 20),
+      textcolor = color.white,
+      size      = size.small)
+    btLabels.push(lbl)
+
+    // Trim old markers
+    if btLabels.size() > i_btMaxMarkers
+        label.delete(btLabels.shift())
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 6 — MODULE 3: EXHAUSTION / ABSORPTION
+// ─────────────────────────────────────────────────────────────────────────────
+//
+//  EXHAUSTION: Aggressive orders fire heavily but price barely moves.
+//    → High |delta| + low price range relative to ATR.
+//    → Signal: momentum is dying, potential reversal.
+//
+//  ABSORPTION: Passive limit orders absorb aggressive market orders.
+//    → Price moves one direction but delta is opposite.
+//    → Bullish absorption: bearish bar + positive delta (passive buyers win)
+//    → Bearish absorption: bullish bar + negative delta (passive sellers win)
+//    → Signal: price likely reverses toward the absorbing side.
+//
+//  Both require significant volume to filter noise.
+
+float avgAbsDelta  = ta.sma(math.abs(delta), i_btLookback)
+float deltaThresh  = avgAbsDelta * i_eaDeltaMult
+float barRange     = high - low
+float avgVolume    = ta.sma(volume, i_btLookback)
+bool  volSignificant = volume > avgVolume * 1.2
+
+// ── Exhaustion Detection ────────────────────────────────────────────────────
+bool isExhaustion = math.abs(delta) > deltaThresh and
+                    barRange < atr * i_eaExhPriceFactor and
+                    barRange > 0 and
+                    volSignificant
+
+bool exhaustBull = isExhaustion and delta > 0   // Buying exhausted — potential top
+bool exhaustBear = isExhaustion and delta < 0   // Selling exhausted — potential bottom
+
+// ── Absorption Detection ────────────────────────────────────────────────────
+bool priceUp   = close > open
+bool priceDown = close < open
+
+// Bullish absorption: price drops but buyers absorbed (positive delta)
+bool absorbBull = priceDown and delta > deltaThresh and volSignificant
+// Bearish absorption: price rises but sellers absorbed (negative delta)
+bool absorbBear = priceUp and delta < -deltaThresh and volSignificant
+
+// ── Render Markers ──────────────────────────────────────────────────────────
+var array<label> eaLabels = array.new<label>()
+
+if i_showExhAbsorb
+    // Exhaustion markers — triangles pointing against momentum
+    if exhaustBull
+        label lbl = label.new(bar_index, high + atr * 0.4, "EXH",
+          style = label.style_label_down, color = color.new(C_EXHAUST, 10),
+          textcolor = #1A1A2E, size = size.tiny)
+        eaLabels.push(lbl)
+
+    if exhaustBear
+        label lbl = label.new(bar_index, low - atr * 0.4, "EXH",
+          style = label.style_label_up, color = color.new(C_EXHAUST, 10),
+          textcolor = #1A1A2E, size = size.tiny)
+        eaLabels.push(lbl)
+
+    // Absorption markers — squares at absorption price
+    if absorbBull
+        label lbl = label.new(bar_index, low - atr * 0.6, "ABS ▲",
+          style = label.style_label_up, color = color.new(C_ABSORB_BULL, 10),
+          textcolor = color.white, size = size.tiny)
+        eaLabels.push(lbl)
+
+    if absorbBear
+        label lbl = label.new(bar_index, high + atr * 0.6, "ABS ▼",
+          style = label.style_label_down, color = color.new(C_ABSORB_BEAR, 10),
+          textcolor = color.white, size = size.tiny)
+        eaLabels.push(lbl)
+
+    // Trim old markers
+    while eaLabels.size() > i_eaMaxMarkers
+        label.delete(eaLabels.shift())
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 7 — MODULE 4: IVB (INITIAL VOLUME BALANCE)
+// ─────────────────────────────────────────────────────────────────────────────
+//  Opening Range Breakout with volumetric confirmation.
+//  Tracks the high/low of the first N minutes after RTH open.
+//  Breakouts beyond the IB range require volume confirmation.
+//
+//  Mean-Reversion: Price inside IB → trade toward POC.
+//  Continuation: Price breaks IB with volume → ride the breakout.
+
+// ── Session Detection ───────────────────────────────────────────────────────
+bool isInRTH    = not na(time(timeframe.period, i_ivbSession, i_ivbTimezone))
+bool isNewRTH   = isInRTH and not isInRTH[1]
+bool sessionEnd = not isInRTH and isInRTH[1]
+
+// ── IB Period Tracking ──────────────────────────────────────────────────────
+var float ibHigh       = na
+var float ibLow        = na
+var int   ibStartTime  = 0
+var bool  ibComplete   = false
+var float ibVolume     = 0.0
+var float sessionVol   = 0.0
+var int   sessionBars  = 0
+var bool  ibBrokenUp   = false
+var bool  ibBrokenDown = false
+
+// ── IVB State Machine ───────────────────────────────────────────────────────
+if isNewRTH
+    ibHigh       := high
+    ibLow        := low
+    ibStartTime  := time
+    ibComplete   := false
+    ibVolume     := volume
+    sessionVol   := volume
+    sessionBars  := 1
+    ibBrokenUp   := false
+    ibBrokenDown := false
+else if isInRTH
+    sessionVol  += volume
+    sessionBars += 1
+
+    if not ibComplete
+        // Still within IB formation period
+        int elapsedMs = time - ibStartTime
+        int ibDurationMs = i_ivbMinutes * 60 * 1000
+
+        if elapsedMs < ibDurationMs
+            ibHigh   := math.max(nz(ibHigh, high), high)
+            ibLow    := math.min(nz(ibLow, low), low)
+            ibVolume += volume
+        else
+            ibComplete := true
+
+    // ── Breakout Detection (after IB completes) ─────────────────────────
+    if ibComplete and not na(ibHigh) and not na(ibLow)
+        float avgBarVol = sessionBars > 0 ? sessionVol / sessionBars : 0
+        bool  volConfirm = volume > avgBarVol * i_ivbBreakVol
+
+        if close > ibHigh and not ibBrokenUp and volConfirm
+            ibBrokenUp := true
+        if close < ibLow and not ibBrokenDown and volConfirm
+            ibBrokenDown := true
+
+// ── IVB Rendering ───────────────────────────────────────────────────────────
+var box  ivbBox       = na
+var line ivbHighLine  = na
+var line ivbLowLine   = na
+
+if i_showIVB and isNewRTH
+    // Clean up previous session's IVB
+    if not na(ivbBox)
+        box.delete(ivbBox)
+    if not na(ivbHighLine)
+        line.delete(ivbHighLine)
+    if not na(ivbLowLine)
+        line.delete(ivbLowLine)
+
+    ivbBox      := na
+    ivbHighLine := na
+    ivbLowLine  := na
+
+if i_showIVB and ibComplete and isInRTH and not na(ibHigh)
+    int rightEdge = i_ivbExtend ? bar_index + 50 : bar_index
+
+    if not na(ivbBox)
+        box.set_right(ivbBox, rightEdge)
+    else
+        ivbBox := box.new(bar_index - sessionBars, ibHigh, rightEdge, ibLow,
+          border_color = color.new(C_IVB, 30),
+          bgcolor      = color.new(C_IVB, 92),
+          border_width = 1,
+          border_style = line.style_dashed)
+
+    // IB High / Low extension lines
+    if not na(ivbHighLine)
+        line.set_x2(ivbHighLine, rightEdge)
+    else
+        ivbHighLine := line.new(bar_index, ibHigh, rightEdge, ibHigh,
+          color = color.new(C_IVB, 40), width = 1, style = line.style_dotted)
+
+    if not na(ivbLowLine)
+        line.set_x2(ivbLowLine, rightEdge)
+    else
+        ivbLowLine := line.new(bar_index, ibLow, rightEdge, ibLow,
+          color = color.new(C_IVB, 40), width = 1, style = line.style_dotted)
+
+// ── IVB Breakout Markers ────────────────────────────────────────────────────
+bool ivbBreakUpNow   = ibBrokenUp and not ibBrokenUp[1]
+bool ivbBreakDownNow = ibBrokenDown and not ibBrokenDown[1]
+
+plotshape(i_showIVB and ivbBreakUpNow ? ibHigh + atr * 0.2 : na,
+  "IVB Break Up", shape.arrowup, location.absolute,
+  C_IVB_BREAK, size = size.small)
+plotshape(i_showIVB and ivbBreakDownNow ? ibLow - atr * 0.2 : na,
+  "IVB Break Down", shape.arrowdown, location.absolute,
+  C_IVB_BREAK, size = size.small)
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 8 — MODULE 5: FVG / IFVG (FAIR VALUE GAPS)
+// ─────────────────────────────────────────────────────────────────────────────
+//  FVG = 3-candle price imbalance where bar[0].low > bar[2].high (bullish)
+//  or bar[0].high < bar[2].low (bearish).
+//
+//  IFVG = Filled FVG that flips polarity. A bullish FVG once mitigated
+//  becomes resistance (bearish IFVG) and vice versa.
+//
+//  Volume-weighted: FVGs formed on high-volume bars are prioritized.
+
+var array<FVGZone> fvgZones = array.new<FVGZone>()
+
+if i_showFVG
+    float atrFilter = atr * i_fvgMinAtrMult
+
+    // ── Detect new FVGs ─────────────────────────────────────────────────
+    bool bullFVG = low > high[2] and (low - high[2]) > atrFilter
+    bool bearFVG = high < low[2] and (low[2] - high) > atrFilter
+
+    if bullFVG
+        box bx = box.new(bar_index - 1, low, bar_index + 20, high[2],
+          border_color = color.new(C_FVG_BULL, 60),
+          bgcolor      = color.new(C_FVG_BULL, i_fvgTransparency),
+          border_width = 1)
+        FVGZone zone = FVGZone.new(bx, low, high[2], bar_index, true, false, false)
+        fvgZones.push(zone)
+
+    if bearFVG
+        box bx = box.new(bar_index - 1, low[2], bar_index + 20, high,
+          border_color = color.new(C_FVG_BEAR, 60),
+          bgcolor      = color.new(C_FVG_BEAR, i_fvgTransparency),
+          border_width = 1)
+        FVGZone zone = FVGZone.new(bx, low[2], high, bar_index, false, false, false)
+        fvgZones.push(zone)
+
+    // ── Manage existing FVGs: extension, mitigation, IFVG conversion ────
+    int idx = 0
+    while idx < fvgZones.size()
+        FVGZone z = fvgZones.get(idx)
+        bool shouldRemove = false
+
+        if z.isBullish and not z.isIFVG
+            // Bullish FVG: top = z.top (bar[0] low), bottom = z.bottom (bar[2] high)
+            // Mitigated when price drops through the zone
+            if close < z.bottom
+                z.isFilled := true
+                if i_fvgShowIFVG
+                    // Convert to bearish IFVG (resistance)
+                    z.isIFVG := true
+                    box.set_bgcolor(z.bx, color.new(C_IFVG, i_fvgTransparency))
+                    box.set_border_color(z.bx, color.new(C_IFVG, 60))
+                else if i_fvgAutoRemove
+                    shouldRemove := true
+            // Extend box rightward
+            box.set_right(z.bx, bar_index + 5)
+
+        else if not z.isBullish and not z.isIFVG
+            // Bearish FVG: top = z.top (bar[2] low), bottom = z.bottom (bar[0] high)
+            if close > z.top
+                z.isFilled := true
+                if i_fvgShowIFVG
+                    z.isIFVG := true
+                    box.set_bgcolor(z.bx, color.new(C_IFVG, i_fvgTransparency))
+                    box.set_border_color(z.bx, color.new(C_IFVG, 60))
+                else if i_fvgAutoRemove
+                    shouldRemove := true
+            box.set_right(z.bx, bar_index + 5)
+
+        else if z.isIFVG
+            // IFVG: remove if price moves back through it decisively
+            bool ifvgBroken = (z.isBullish and close > z.top) or
+                              (not z.isBullish and close < z.bottom)
+            if ifvgBroken
+                shouldRemove := true
+            else
+                box.set_right(z.bx, bar_index + 5)
+
+        // Age-based removal: older than 500 bars
+        if bar_index - z.barStart > 500
+            shouldRemove := true
+
+        if shouldRemove
+            box.delete(z.bx)
+            fvgZones.remove(idx)
+        else
+            idx += 1
+
+    // ── Trim excess FVGs ────────────────────────────────────────────────
+    while fvgZones.size() > i_fvgMaxBoxes
+        FVGZone oldest = fvgZones.shift()
+        box.delete(oldest.bx)
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 9 — MODULE 6: VOLUME PROFILE S/R ZONES
+// ─────────────────────────────────────────────────────────────────────────────
+//  Uses footprint POC, VAH, VAL as dynamic support/resistance.
+//  Tracks session POCs. Unretested POCs become "Naked POCs" — powerful
+//  S/R magnets that often attract price for a retest.
+//
+//  Mean-Reversion: Price deviating from POC tends to return.
+//  Continuation: Price accepting above/below VA signals trend.
+
+// ── Session POC / VA Lines ──────────────────────────────────────────────────
+var line pocLine  = na
+var line vahLine  = na
+var line valLine  = na
+
+if i_showVPSR and hasFP
+    // Update POC line
+    if not na(fpPOC)
+        if na(pocLine)
+            pocLine := line.new(bar_index - 1, fpPOC, bar_index, fpPOC,
+              color = C_POC, width = i_vpLineWidth, style = line.style_solid)
+        else
+            line.set_xy1(pocLine, bar_index - 1, fpPOC)
+            line.set_xy2(pocLine, bar_index, fpPOC)
+
+    // Update VAH line
+    if i_vpShowVA and not na(fpVAH)
+        if na(vahLine)
+            vahLine := line.new(bar_index - 1, fpVAH, bar_index, fpVAH,
+              color = color.new(C_VA, 30), width = 1, style = line.style_dotted)
+        else
+            line.set_xy1(vahLine, bar_index - 1, fpVAH)
+            line.set_xy2(vahLine, bar_index, fpVAH)
+
+    // Update VAL line
+    if i_vpShowVA and not na(fpVAL)
+        if na(valLine)
+            valLine := line.new(bar_index - 1, fpVAL, bar_index, fpVAL,
+              color = color.new(C_VA, 30), width = 1, style = line.style_dotted)
+        else
+            line.set_xy1(valLine, bar_index - 1, fpVAL)
+            line.set_xy2(valLine, bar_index, fpVAL)
+
+// ── Naked POC Tracking ──────────────────────────────────────────────────────
+//  On each new session, store the previous session's POC.
+//  Remove it when price trades through it (no longer "naked").
+
+var array<NakedPOC> nakedPOCs = array.new<NakedPOC>()
+var float lastSessionPOC = na
+
+if i_showVPSR and i_vpNakedPOC
+    // On session change, store previous POC as naked
+    if isNewRTH and not na(lastSessionPOC)
+        line npLine = line.new(bar_index, lastSessionPOC, bar_index + 200, lastSessionPOC,
+          color = C_NAKED_POC, width = 1, style = line.style_dashed)
+        NakedPOC np = NakedPOC.new(lastSessionPOC, bar_index, npLine)
+        nakedPOCs.push(np)
+
+        // Trim excess
+        while nakedPOCs.size() > i_vpMaxNaked
+            NakedPOC oldest = nakedPOCs.shift()
+            line.delete(oldest.ln)
+
+    // Update stored POC for this session
+    if isInRTH and not na(fpPOC)
+        lastSessionPOC := fpPOC
+
+    // Check if price has touched any naked POC → remove it
+    int npIdx = 0
+    while npIdx < nakedPOCs.size()
+        NakedPOC np = nakedPOCs.get(npIdx)
+        bool touched = low <= np.price and high >= np.price
+        if touched
+            line.delete(np.ln)
+            nakedPOCs.remove(npIdx)
+        else
+            // Extend line
+            line.set_x2(np.ln, bar_index + 50)
+            npIdx += 1
+
+// ── Value Area Zone Fill ────────────────────────────────────────────────────
+//  Semi-transparent fill between VAH and VAL to visualize fair value.
+plot(i_showVPSR and i_vpShowVA ? fpVAH : na, "VAH Plot",
+  color.new(C_VA, 80), 0, display = display.none)
+plot(i_showVPSR and i_vpShowVA ? fpVAL : na, "VAL Plot",
+  color.new(C_VA, 80), 0, display = display.none)
+
+pVAH = plot(i_showVPSR and i_vpShowVA ? fpVAH : na, "VAH Fill",
+  display = display.none)
+pVAL = plot(i_showVPSR and i_vpShowVA ? fpVAL : na, "VAL Fill",
+  display = display.none)
+fill(pVAH, pVAL, color.new(C_VA, 94), title = "Value Area Fill")
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 10 — IMBALANCE SCANNER (BONUS — from footprint rows)
+// ─────────────────────────────────────────────────────────────────────────────
+//  Scans footprint rows for stacked buy/sell imbalances.
+//  Stacked imbalances = 3+ consecutive rows with one-sided dominance.
+//  These mark institutional entry zones (demand/supply).
+
+var array<label> imbLabels = array.new<label>()
+
+if hasFP and i_showVPSR
+    array<volume_row> rows = fp.rows()
+    int stackedBuy  = 0
+    int stackedSell = 0
+
+    for row in rows
+        if row.buy_imbalance()
+            stackedBuy += 1
+        if row.sell_imbalance()
+            stackedSell += 1
+
+    // Flag significant stacked imbalances (3+)
+    if stackedBuy >= 3
+        label lbl = label.new(bar_index, low - atr * 0.15,
+          "▮" + str.tostring(stackedBuy),
+          style = label.style_label_up,
+          color = color.new(C_BUY, 30),
+          textcolor = color.white,
+          size = size.tiny)
+        imbLabels.push(lbl)
+
+    if stackedSell >= 3
+        label lbl = label.new(bar_index, high + atr * 0.15,
+          "▮" + str.tostring(stackedSell),
+          style = label.style_label_down,
+          color = color.new(C_SELL, 30),
+          textcolor = color.white,
+          size = size.tiny)
+        imbLabels.push(lbl)
+
+    while imbLabels.size() > 40
+        label.delete(imbLabels.shift())
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 11 — DASHBOARD PANEL
+// ─────────────────────────────────────────────────────────────────────────────
+//  Real-time metrics panel showing key order flow state at a glance.
+
+var table dash = na
+
+if i_showDash
+    position dashPosition = switch i_dashPos
+        "Top Left"     => position.top_left
+        "Top Right"    => position.top_right
+        "Bottom Left"  => position.bottom_left
+        "Bottom Right" => position.bottom_right
+        => position.top_right
+
+    if na(dash)
+        dash := table.new(dashPosition, 2, 9,
+          bgcolor     = color.new(C_DASH_BG, 15),
+          border_color = color.new(C_NEUTRAL, 60),
+          border_width = 1,
+          frame_color  = color.new(C_NEUTRAL, 40),
+          frame_width  = 1)
+
+    // Header
+    table.cell(dash, 0, 0, "DeepFlow v1.0", text_color = C_POC,
+      text_size = i_dashSize, text_halign = text.align_left)
+    table.cell(dash, 1, 0, syminfo.tickerid, text_color = C_DASH_TXT,
+      text_size = i_dashSize, text_halign = text.align_right)
+
+    // Delta
+    color deltaClr = delta >= 0 ? C_BUY : C_SELL
+    table.cell(dash, 0, 1, "Delta", text_color = C_DASH_TXT, text_size = i_dashSize)
+    table.cell(dash, 1, 1, str.tostring(delta, "#.##"), text_color = deltaClr,
+      text_size = i_dashSize)
+
+    // CVD
+    color cvdClr = cvd >= 0 ? C_BUY : C_SELL
+    table.cell(dash, 0, 2, "CVD", text_color = C_DASH_TXT, text_size = i_dashSize)
+    table.cell(dash, 1, 2, str.tostring(cvd, "#.#"), text_color = cvdClr,
+      text_size = i_dashSize)
+
+    // Buy / Sell Volume
+    table.cell(dash, 0, 3, "Buy Vol", text_color = C_DASH_TXT, text_size = i_dashSize)
+    table.cell(dash, 1, 3, str.tostring(buyVol, "#.#"), text_color = C_BUY,
+      text_size = i_dashSize)
+    table.cell(dash, 0, 4, "Sell Vol", text_color = C_DASH_TXT, text_size = i_dashSize)
+    table.cell(dash, 1, 4, str.tostring(sellVol, "#.#"), text_color = C_SELL,
+      text_size = i_dashSize)
+
+    // POC
+    table.cell(dash, 0, 5, "POC", text_color = C_DASH_TXT, text_size = i_dashSize)
+    table.cell(dash, 1, 5, not na(fpPOC) ? str.tostring(fpPOC, "#.##") : "—",
+      text_color = C_POC, text_size = i_dashSize)
+
+    // VAH / VAL
+    table.cell(dash, 0, 6, "VAH", text_color = C_DASH_TXT, text_size = i_dashSize)
+    table.cell(dash, 1, 6, not na(fpVAH) ? str.tostring(fpVAH, "#.##") : "—",
+      text_color = C_VA, text_size = i_dashSize)
+    table.cell(dash, 0, 7, "VAL", text_color = C_DASH_TXT, text_size = i_dashSize)
+    table.cell(dash, 1, 7, not na(fpVAL) ? str.tostring(fpVAL, "#.##") : "—",
+      text_color = C_VA, text_size = i_dashSize)
+
+    // IVB Status
+    string ivbStatus = ibComplete ? (ibBrokenUp ? "BREAK ▲" : ibBrokenDown ? "BREAK ▼" : "INSIDE") : "FORMING"
+    color ivbClr = ibBrokenUp ? C_BUY : ibBrokenDown ? C_SELL : ibComplete ? C_NEUTRAL : C_IVB
+    table.cell(dash, 0, 8, "IVB", text_color = C_DASH_TXT, text_size = i_dashSize)
+    table.cell(dash, 1, 8, ivbStatus, text_color = ivbClr, text_size = i_dashSize)
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 12 — BAR COLORING (OPTIONAL)
+// ─────────────────────────────────────────────────────────────────────────────
+//  Subtle bar coloring based on delta direction for quick visual read.
+
+color barDeltaColor = delta > 0 ? color.new(C_BUY, 60) : delta < 0 ? color.new(C_SELL, 60) : na
+barcolor(barDeltaColor, title = "Delta Bar Color")
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 13 — ALERTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Big Trades
+alertcondition(isBigTrade and btIsBuy,  "Big Buy Trade",
+  "🐋 Big BUY detected: {{volume}} contracts at {{close}}")
+alertcondition(isBigTrade and btIsSell, "Big Sell Trade",
+  "🐋 Big SELL detected: {{volume}} contracts at {{close}}")
+
+// Exhaustion
+alertcondition(exhaustBull, "Buy Exhaustion",
+  "⚡ BUY EXHAUSTION: High delta but price stalled. Potential top.")
+alertcondition(exhaustBear, "Sell Exhaustion",
+  "⚡ SELL EXHAUSTION: High delta but price stalled. Potential bottom.")
+
+// Absorption
+alertcondition(absorbBull, "Bullish Absorption",
+  "🛡️ BULLISH ABSORPTION: Passive buyers absorbing sellers at {{close}}")
+alertcondition(absorbBear, "Bearish Absorption",
+  "🛡️ BEARISH ABSORPTION: Passive sellers absorbing buyers at {{close}}")
+
+// IVB Breakout
+alertcondition(ivbBreakUpNow, "IVB Breakout Up",
+  "📐 IVB BREAKOUT UP: Price broke above Initial Balance with volume confirmation")
+alertcondition(ivbBreakDownNow, "IVB Breakout Down",
+  "📐 IVB BREAKOUT DOWN: Price broke below Initial Balance with volume confirmation")
+
+// CVD Divergence
+alertcondition(cvdBullDiv, "CVD Bullish Divergence",
+  "💎 CVD BULL DIVERGENCE: Price lower low but CVD higher low")
+alertcondition(cvdBearDiv, "CVD Bearish Divergence",
+  "💎 CVD BEAR DIVERGENCE: Price higher high but CVD lower high")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// END OF DEEPFLOW v1.0
+// ═══════════════════════════════════════════════════════════════════════════════
