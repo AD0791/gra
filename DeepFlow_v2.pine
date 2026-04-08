@@ -1,0 +1,214 @@
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+//    ██████╗ ███████╗███████╗██████╗ ███████╗██╗      ██████╗ ██╗    ██╗
+//    ██╔══██╗██╔════╝██╔════╝██╔══██╗██╔════╝██║     ██╔═══██╗██║    ██║
+//    ██║  ██║█████╗  █████╗  ██████╔╝█████╗  ██║     ██║   ██║██║ █╗ ██║
+//    ██║  ██║██╔══╝  ██╔══╝  ██╔═══╝ ██╔══╝  ██║     ██║   ██║██║███╗██║
+//    ██████╔╝███████╗███████╗██║     ██║     ███████╗╚██████╔╝╚███╔███╔╝
+//    ╚═════╝ ╚══════╝╚══════╝╚═╝     ╚═╝     ╚══════╝ ╚═════╝  ╚══╝╚══╝
+//
+//    DeepFlow v2.0 — Order Flow Analytics (Standard Edition)
+//    Inspired by DeepCharts® | No Premium Required
+//    Engineered for CME/CBOT Futures: All timeframes, including intraday
+//
+//    ARCHITECTURE:
+//      • Dual-mode delta engine: Intrabar LTF (primary) + Chaikin MFM (fallback)
+//      • All markers anchored to candle coordinates (bar_index / yloc.price)
+//      • Real-time signal stability: Handlers for tick-by-tick coordinate updates
+//
+// ═══════════════════════════════════════════════════════════════════════════════
+
+//@version=6
+indicator("DeepFlow v2.0 — Order Flow Analytics", "DeepFlow", overlay = true,
+  max_boxes_count  = 500,
+  max_labels_count = 500,
+  max_lines_count  = 500,
+  max_bars_back    = 5000)
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 0 — DEEPCHARTS COLOR THEME
+// ─────────────────────────────────────────────────────────────────────────────
+
+var color C_BUY           = #00E676
+var color C_SELL          = #FF1744
+var color C_ABSORB_BULL   = #00BFA5
+var color C_ABSORB_BEAR   = #D500F9
+var color C_EXHAUST       = #FFD600
+var color C_BIGTRADE_BUY  = #00E5FF
+var color C_BIGTRADE_SELL = #FF6D00
+var color C_NEUTRAL       = #546E7A
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 1 — INPUTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── Intrabar Engine ─────────────────────────────────────────────────────────
+string GRP_ENG = "⚙️ Intrabar Delta Engine"
+string i_ltfMode = input.string("Auto", "Lower Timeframe",
+  options = ["Auto", "1T", "1S", "1"],
+  group   = GRP_ENG,
+  tooltip = "Timeframe used to reconstruct buy/sell volume inside each chart bar.")
+string i_deltaMethod = input.string("Buying/Selling Pressure", "Delta Classification",
+  options = ["Buying/Selling Pressure", "Polarity"],
+  group   = GRP_ENG)
+
+// ── Module Toggles ──────────────────────────────────────────────────────────
+string GRP_MOD = "🔌 Module Toggles"
+bool i_showBigTrades = input.bool(true, "Big Trades Detection",   group = GRP_MOD)
+bool i_showExhAbsorb = input.bool(true, "Exhaustion / Absorption", group = GRP_MOD)
+
+// ── Big Trades Settings ─────────────────────────────────────────────────────
+string GRP_BT = "🐋 Big Trades Detection"
+int   i_btLookback   = input.int(50, "Statistical Lookback", minval = 10, group = GRP_BT)
+float i_btMultiplier = input.float(2.0, "Std Dev Multiplier", minval = 1.0, step = 0.1, group = GRP_BT)
+
+// ── Exhaustion / Absorption Settings ────────────────────────────────────────
+string GRP_EA = "⚡ Exhaustion / Absorption"
+float i_eaDeltaMult      = input.float(1.8, "Delta Threshold (× avg)", group = GRP_EA)
+float i_eaExhPriceFactor = input.float(0.4, "Exhaustion: Price Factor", group = GRP_EA)
+int   i_eaAtrLen         = input.int(14, "ATR Length", group = GRP_EA)
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 2 — INTRABAR DELTA ENGINE
+// ─────────────────────────────────────────────────────────────────────────────
+
+autoLTF() =>
+    float tfMins = timeframe.in_seconds() / 60.0
+    tfMins > 5 ? "1" : "1S"
+
+string ltfString = i_ltfMode == "Auto" ? autoLTF() : i_ltfMode
+
+// Fetch Data
+array<float> ltfClose  = request.security_lower_tf(syminfo.tickerid, ltfString, close)
+array<float> ltfOpen   = request.security_lower_tf(syminfo.tickerid, ltfString, open)
+array<float> ltfHigh   = request.security_lower_tf(syminfo.tickerid, ltfString, high)
+array<float> ltfLow    = request.security_lower_tf(syminfo.tickerid, ltfString, low)
+array<float> ltfVolume = request.security_lower_tf(syminfo.tickerid, ltfString, volume)
+
+float intrabarBuyVol  = 0.0
+float intrabarSellVol = 0.0
+
+if ltfClose.size() > 0
+    for i = 0 to ltfClose.size() - 1
+        float c = ltfClose.get(i), float o = ltfOpen.get(i), float h = ltfHigh.get(i), float l = ltfLow.get(i), float v = ltfVolume.get(i)
+        bool isBuy = i_deltaMethod == "Buying/Selling Pressure" ? 
+          ((h - l) > 0 ? (c - l) > (h - c) : (i > 0 ? c >= ltfClose.get(i-1) : c >= o)) : 
+          (c != o ? c > o : (i > 0 ? c >= ltfClose.get(i-1) : c >= o))
+        if isBuy
+            intrabarBuyVol += v
+        else
+            intrabarSellVol += v
+
+// Unified Stats
+float barRange = high - low
+float mfm = barRange > 0 ? ((close - low) - (high - close)) / barRange : 0.0
+float buyVol = ltfClose.size() > 0 ? intrabarBuyVol : volume * (1.0 + mfm) / 2.0
+float sellVol = ltfClose.size() > 0 ? intrabarSellVol : volume * (1.0 - mfm) / 2.0
+float delta = buyVol - sellVol
+float atr = ta.atr(i_eaAtrLen)
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 3 — MODULE 1: BIG TRADES DETECTION
+// ─────────────────────────────────────────────────────────────────────────────
+
+float buyMean = ta.sma(buyVol, i_btLookback)[1], float buyStdev = ta.stdev(buyVol, i_btLookback)[1]
+float sellMean = ta.sma(sellVol, i_btLookback)[1], float sellStdev = ta.stdev(sellVol, i_btLookback)[1]
+
+bool btIsBuy  = buyVol  > (buyMean  + i_btMultiplier * nz(buyStdev, 0))
+bool btIsSell = sellVol > (sellMean + i_btMultiplier * nz(sellStdev, 0))
+
+var array<label> btLabels = array.new<label>()
+var label lastBuyBT  = na
+var label lastSellBT = na
+
+// Clean/Update Big Buy Label
+if i_showBigTrades and btIsBuy
+    float yPos = math.avg(close, low)
+    string txt = buyVol >= 1000 ? str.tostring(buyVol/1000, "#.#") + "K" : str.tostring(buyVol, "#")
+    string sz  = buyVol > (buyMean + buyStdev * (i_btMultiplier + 3.0)) ? size.large : 
+                 buyVol > (buyMean + buyStdev * (i_btMultiplier + 1.5)) ? size.normal : size.small
+    
+    if not na(lastBuyBT) and label.get_x(lastBuyBT) == bar_index
+        label.set_y(lastBuyBT, yPos)
+        label.set_text(lastBuyBT, txt)
+        label.set_size(lastBuyBT, sz)
+    else
+        lastBuyBT := label.new(
+          x         = bar_index, 
+          y         = yPos, 
+          text      = txt, 
+          xloc      = xloc.bar_index, 
+          yloc      = yloc.price, 
+          style     = label.style_circle, 
+          color     = color.new(C_BIGTRADE_BUY, 15), 
+          textcolor = color.white, 
+          size      = sz)
+        btLabels.push(lastBuyBT)
+else if not na(lastBuyBT) and label.get_x(lastBuyBT) == bar_index
+    label.delete(lastBuyBT)
+    lastBuyBT := na
+
+// Clean/Update Big Sell Label
+if i_showBigTrades and btIsSell
+    float yPos = math.avg(close, high)
+    string txt = sellVol >= 1000 ? str.tostring(sellVol/1000, "#.#") + "K" : str.tostring(sellVol, "#")
+    string sz  = sellVol > (sellMean + sellStdev * (i_btMultiplier + 3.0)) ? size.large : 
+                 sellVol > (sellMean + sellStdev * (i_btMultiplier + 1.5)) ? size.normal : size.small
+    
+    if not na(lastSellBT) and label.get_x(lastSellBT) == bar_index
+        label.set_y(lastSellBT, yPos)
+        label.set_text(lastSellBT, txt)
+        label.set_size(lastSellBT, sz)
+    else
+        lastSellBT := label.new(
+          x         = bar_index, 
+          y         = yPos, 
+          text      = txt, 
+          xloc      = xloc.bar_index, 
+          yloc      = yloc.price, 
+          style     = label.style_circle, 
+          color     = color.new(C_BIGTRADE_SELL, 15), 
+          textcolor = color.white, 
+          size      = sz)
+        btLabels.push(lastSellBT)
+else if not na(lastSellBT) and label.get_x(lastSellBT) == bar_index
+    label.delete(lastSellBT)
+    lastSellBT := na
+
+while btLabels.size() > 500
+    label.delete(btLabels.shift())
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 4 — MODULE 2: EXHAUSTION / ABSORPTION
+// ─────────────────────────────────────────────────────────────────────────────
+
+float avgAbsDelta = ta.sma(math.abs(delta), i_btLookback)
+bool sigExh = math.abs(delta) > (avgAbsDelta * i_eaDeltaMult) and barRange < atr * i_eaExhPriceFactor and barRange > 0
+bool sigAbs = (close < open and delta > (avgAbsDelta * i_eaDeltaMult)) or (close > open and delta < -(avgAbsDelta * i_eaDeltaMult))
+
+plotshape(i_showExhAbsorb and sigExh and delta > 0, "Exh Bull", shape.circle, location.abovebar, C_EXHAUST, text="EXH", textcolor=#1A1A2E, size=size.small)
+plotshape(i_showExhAbsorb and sigExh and delta < 0, "Exh Bear", shape.circle, location.belowbar, C_EXHAUST, text="EXH", textcolor=#1A1A2E, size=size.small)
+plotshape(i_showExhAbsorb and sigAbs and delta > 0, "Abs Bull", shape.triangleup, location.belowbar, C_ABSORB_BULL, text="ABS", textcolor=color.white, size=size.small)
+plotshape(i_showExhAbsorb and sigAbs and delta < 0, "Abs Bear", shape.triangledown, location.abovebar, C_ABSORB_BEAR, text="ABS", textcolor=color.white, size=size.small)
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 5 — BAR COLORING
+// ─────────────────────────────────────────────────────────────────────────────
+
+barcolor(delta > 0 ? color.new(C_BUY, 60) : delta < 0 ? color.new(C_SELL, 60) : na)
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION 6 — ALERTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+alertcondition(btIsBuy,  "Big Buy Detected",  "🐋 BIG BUY: {{volume}}")
+alertcondition(btIsSell, "Big Sell Detected", "🐋 BIG SELL: {{volume}}")
+alertcondition(sigExh,   "Exhaustion",        "⚡ EXHAUSTION at {{close}}")
+alertcondition(sigAbs,   "Absorption",        "🛡️ ABSORPTION at {{close}}")
