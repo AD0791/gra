@@ -1,3 +1,6 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © LuxAlgo
+
 // ═══════════════════════════════════════════════════════════════════════════════
 //
 //    ██████╗ ███████╗███████╗██████╗ ███████╗██╗      ██████╗ ██╗    ██╗
@@ -7,651 +10,141 @@
 //    ██████╔╝███████╗███████╗██║     ██║     ███████╗╚██████╔╝╚███╔███╔╝
 //    ╚═════╝ ╚══════╝╚══════╝╚═╝     ╚═╝     ╚══════╝ ╚═════╝  ╚══╝╚══╝
 //
-//    DeepFlow v3.0 — Exhaustion & Absorption Detector
-//    Engineered for CME/CBOT Futures | 1H/2H/4H Execution
-//
-//    ONE TOOL, ONE JOB: Detect where aggressive orders die.
-//
-//    • Volume bubbles locked inside candle wicks
-//    • Bubble size = relative volume (institutional footprint)
-//    • Auto S/R zones from historical E/A clusters
-//    • YM Mode: optimized for 1-5 MYM contracts
-//    • Gold Rush Mode: strict filter for high-liquidity markets
-//
-//    Every intrabar carries potential institutional weight.
-//    We treat none of them as noise.
+//    DeepFlow v5.2 — Order Flow Alpha (Institutional Calibration)
+//    Precision: 1-Tick / 1-Second / 1-Minute Delta Analysis
+//    Asset Optimization: MYM (Dow), MGC (Gold), MNQ (Nasdaq)
 //
 // ═══════════════════════════════════════════════════════════════════════════════
 
 //@version=6
-indicator("DeepFlow v3 — Exhaust·Absorb", "DF³", overlay = true,
-  max_labels_count = 500,
-  max_boxes_count  = 500,
-  max_lines_count  = 500,
-  max_bars_back    = 5000)
-
+strategy("DeepFlow v5.2 — Order Flow Strategy", "DF⁵ Alpha", overlay = true, max_boxes_count = 500, max_labels_count = 500, initial_capital = 10000, default_qty_type = strategy.percent_of_equity, default_qty_value = 10)
 
 // ─────────────────────────────────────────────────────────────────────────────
-// COLOR PALETTE — DeepCharts Dark Theme
+// --- 1. ENGINE CALIBRATION ---
+// Calibration Goal: Match your TradingView plan to data speed.
+// Higher precision (1T/1S) allows you to see "hidden" absorption before it prints.
 // ─────────────────────────────────────────────────────────────────────────────
-
-var color C_EXH_BUY     = #FFD600   // Yellow       — buy exhaustion (top)
-var color C_EXH_SELL    = #FFAB00   // Amber        — sell exhaustion (bottom)
-var color C_ABS_BULL    = #00BFA5   // Teal         — bullish absorption
-var color C_ABS_BEAR    = #D500F9   // Purple       — bearish absorption
-var color C_ZONE_EXH    = #FFD600   // Yellow       — exhaustion S/R zone
-var color C_ZONE_ABS    = #00BFA5   // Teal         — absorption S/R zone
-var color C_ZONE_MIXED  = #FF9100   // Orange       — mixed E/A confluence zone
-var color C_NEUTRAL     = #546E7A   // Blue-gray
-var color C_DASH_BG     = #1A1A2E   // Dark navy
-var color C_DASH_TXT    = #E0E0E0   // Light gray
-var color C_DASH_HEAD   = #FF9100   // Orange
-
+string G_ENGINE = "⚙️ Delta Engine"
+string i_res    = input.string("1T", "Primary Delta Source", options = ["1T", "1S", "1"], group = G_ENGINE, tooltip = "CALIBRATION: Use '1T' for Ticks (Elite), '1S' for Seconds (Premium), or '1' for standard minutes.")
 
 // ─────────────────────────────────────────────────────────────────────────────
-// INPUTS
+// --- 2. ASSET VOLATILITY OPTIMIZATION ---
+// Calibration Goal: Adjust thresholds for different volatility profiles.
+// GOLD: High Sigma (2.5+) filters out common spikes.
+// NASDAQ: Lower Sigma (2.0) captures fast momentum shifts.
+// DOW: Balanced Sigma (2.2) captures clean institutional blocks.
 // ─────────────────────────────────────────────────────────────────────────────
-
-// ── Mode Selection ──────────────────────────────────────────────────────────
-string GRP_MODE = "🎯 Trading Mode"
-string i_mode = input.string("YM", "Mode",
-  options = ["YM", "Gold Rush"],
-  group = GRP_MODE,
-  tooltip = "YM MODE — Optimized for YM / MYM. Tuned for\n" +
-            "high-probability 1-2 contract entries and\n" +
-            "very-high-probability 3-5 contract setups.\n" +
-            "More sensitive detection, captures early reversals.\n\n" +
-            "GOLD RUSH — Optimized for GC/MGC, SI, CL/MCL,\n" +
-            "NQ/MNQ, ES/MES. Strict filtering for high-liquidity\n" +
-            "markets. Fewer signals, each one must be a lock.")
-
-// ── Intrabar Engine ─────────────────────────────────────────────────────────
-//  Resolution is auto-detected — no user input required.
-//  The engine always tries the highest available tier for your data plan.
-
-// ── Detection Tuning ────────────────────────────────────────────────────────
-string GRP_DET = "🔬 Detection Sensitivity"
-int   i_atrLen   = input.int(14, "ATR Length", minval = 5, maxval = 50, group = GRP_DET)
-int   i_lookback = input.int(20, "Statistical Lookback",
-  minval = 5, maxval = 200, group = GRP_DET,
-  tooltip = "Bars for rolling mean/stdev of volume and delta.\n" +
-            "With 1S on 2H: ~13 bars available, so 10-15 is realistic.\n" +
-            "With 1S on 1H: ~27 bars available, so 15-25 works.\n" +
-            "With 1S on 15min: ~111 bars, 20-50 is good.\n" +
-            "Adapts automatically — never exceeds available history.")
-
-// ── Bubble Display ──────────────────────────────────────────────────────────
-string GRP_VIS = "🫧 Bubble Display"
-int   i_bubbleAlpha = input.int(20, "Bubble Transparency",
-  minval = 0, maxval = 80, group = GRP_VIS,
-  tooltip = "0 = fully opaque  |  80 = very faint.\n" +
-            "Strong signals are always rendered 30pt more opaque.")
-
-// ── S/R Zone Detection ──────────────────────────────────────────────────────
-string GRP_SR = "🏗️ S/R Zones from E/A Clusters"
-bool  i_showZones  = input.bool(true, "Show S/R Zones", group = GRP_SR)
-int   i_zoneHistory = input.int(100, "History Lookback (bars)",
-  minval = 5, maxval = 500, group = GRP_SR,
-  tooltip = "Max bars to scan for E/A clusters.\n" +
-            "With 1S on 2H: only ~13 bars exist, so this auto-adapts.\n" +
-            "With 1S on 1H: ~27 bars available.\n" +
-            "With 1S on 15min: ~111 bars — zones build nicely.\n" +
-            "With 1min on 2H: ~833 bars — deep zone history.\n" +
-            "The engine uses whatever history is available,\n" +
-            "never more than this setting.")
-float i_zoneCluster = input.float(0.5, "Cluster Distance (× ATR)",
-  minval = 0.1, maxval = 2.0, step = 0.1, group = GRP_SR,
-  tooltip = "E/A events within this ATR fraction are grouped.\n" +
-            "Smaller = tighter zones, more zones.\n" +
-            "Larger = wider zones, fewer zones.")
-int   i_zoneMinEvents = input.int(2, "Min Events for Zone",
-  minval = 2, maxval = 5, group = GRP_SR,
-  tooltip = "Minimum E/A events in a cluster to draw a zone.\n" +
-            "2 = draw zones with 2+ events (more zones).\n" +
-            "3+ = stricter (fewer but stronger zones).")
-int   i_maxZones   = input.int(8, "Max Active Zones",
-  minval = 2, maxval = 15, group = GRP_SR)
-
-// ── Dashboard ───────────────────────────────────────────────────────────────
-string GRP_DSH = "📋 Dashboard"
-bool  i_showDash = input.bool(true, "Show Dashboard", group = GRP_DSH)
-string i_dashPos = input.string("Top Right", "Position",
-  options = ["Top Left", "Top Right", "Bottom Left", "Bottom Right"],
-  group = GRP_DSH)
-
+string G_ASSET  = "🎯 Asset Presets"
+string i_mode   = input.string("Gold", "Select Asset Profile", options = ["Gold", "Nasdaq", "Dow"], group = G_ASSET, tooltip = "CALIBRATION: This changes internal multipliers for Sigma and Body % to match typical volatility for XAU/MGC vs Indices.")
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MODE-DEPENDENT THRESHOLDS
+// --- 3. SIGNAL SENSITIVITY (SIGMA) ---
+// Calibration Goal: Filter 'Market Noise' from 'Institutional Blocks'.
+// If signals are too frequent: Increase Sigma (e.g., 3.0).
+// If signals are too rare: Decrease Sigma (e.g., 1.5).
 // ─────────────────────────────────────────────────────────────────────────────
-//
-//  YM MODE (MYM/YM):
-//    More sensitive. YM is less liquid than ES/NQ, so exhaustion patterns
-//    are cleaner and form faster. Lower thresholds catch early reversals
-//    for 1-2 contract entries. Signals that pass the "strong" filter
-//    are suitable for 3-5 contracts.
-//
-//  GOLD RUSH MODE (GC, SI, CL, NQ, ES + micros):
-//    Strict. These markets are deep — lots of noise, lots of fake-outs.
-//    We need higher conviction: more delta, more volume, more price
-//    confirmation before flagging an event.
+string G_SIGNAL = "🔬 Sensitivity Tuning"
+float  i_sigmaInput = input.float(2.2, "Signal Sigma", minval = 1.0, maxval = 5.0, step = 0.1, group = G_SIGNAL, tooltip = "CALIBRATION: Higher = Only the 'Extreme' volume/delta spikes are shown.")
+int    i_look       = input.int(20, "Stat. Lookback", minval = 10, group = G_SIGNAL, tooltip = "CALIBRATION: How many bars are used to determine 'Average' volume.")
+float  i_bodyInput  = input.float(0.3, "Max Body % (Exhaustion)", minval = 0.1, maxval = 0.6, group = G_SIGNAL, tooltip = "CALIBRATION: Lower = Exhaustion signals require smaller candle bodies (tighter pin bars).")
 
-// ── Exhaustion thresholds ───────────────────────────────────────────────────
-float deltaMult_exh   = i_mode == "YM" ? 1.5 : 2.0
-float priceFactor_exh = i_mode == "YM" ? 0.45 : 0.35
-float volMult_exh     = i_mode == "YM" ? 1.0 : 1.3
+// Colors
+color C_BULL = #089981 // Green
+color C_BEAR = #f23645 // Red
+color C_NEUT = #2962FF // Blue
 
-// ── Absorption thresholds ───────────────────────────────────────────────────
-float deltaMult_abs   = i_mode == "YM" ? 1.3 : 1.8
-float volMult_abs     = i_mode == "YM" ? 1.0 : 1.3
-
-// ── "Strong" signal filter (3-5 contract setups) ────────────────────────────
-float strongDeltaMult = i_mode == "YM" ? 2.2 : 2.8
-float strongVolMult   = i_mode == "YM" ? 1.8 : 2.2
-
+// --- Apply Asset Presets ---
+float sigma = i_sigmaInput * (i_mode == "Gold" ? 1.15 : i_mode == "Nasdaq" ? 0.9 : 1.0)
+float bodyP = i_bodyInput  * (i_mode == "Gold" ? 0.8 : i_mode == "Nasdaq" ? 1.2 : 1.0)
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CUSTOM TYPES
+// --- CORE LOGIC: DELTA ENGINE ---
 // ─────────────────────────────────────────────────────────────────────────────
+get_delta() =>
+    float r = high - low
+    float b = r > 0 ? (close - low) / r * volume : volume * 0.5
+    [b, volume - b]
 
-type EAEvent
-    int     barIdx
-    float   price
-    float   volume
-    float   absDelta
-    int     eventType   // 1=exhaust_buy, 2=exhaust_sell, 3=absorb_bull, 4=absorb_bear
-    bool    isStrong
+[it_b1, it_s1] = request.security_lower_tf(syminfo.tickerid, i_res, get_delta())
+[it_b2, it_s2] = request.security_lower_tf(syminfo.tickerid, "1", get_delta())
 
-type SRZone
-    box     bx
-    float   center
-    float   upper
-    float   lower
-    int     eventCount
-    float   totalVol
-    int     lastBar
+float bV = 0.0, float sV = 0.0, int eng = 0
 
+if array.size(it_b1) > 0
+    bV := array.sum(it_b1), sV := array.sum(it_s1), eng := 0
+else if array.size(it_b2) > 0
+    bV := array.sum(it_b2), sV := array.sum(it_s2), eng := 1
+else
+    float r = high - low, mfv = r > 0 ? ((close - low) - (high - close)) / r : 0.0
+    bV := mfv > 0 ? mfv * volume : 0.0, sV := mfv < 0 ? math.abs(mfv) * volume : 0.0, eng := 2
 
-// ─────────────────────────────────────────────────────────────────────────────
-// INTRABAR DELTA ENGINE — CASCADE
-// ─────────────────────────────────────────────────────────────────────────────
-//
-//  TIER 1 → 1-second  (default — requires second-level data plan)
-//           Every second classified as buy or sell.
-//           1H chart → 3,600 intrabars | 2H → 7,200 | 4H → 14,400
-//
-//  TIER 2 → 1-minute  (fallback — available on all plans)
-//           Only activated when 1S returns no data.
-//           Lower precision but deeper history (~833 bars on 2H).
-//
-//  TIER 3 → Chaikin MFM  (last resort — should never happen on CME/CBOT)
-//           Pure OHLCV formula. No intrabar data at all.
-//
-//  NOTE: 1-tick ("1T") is intentionally excluded. Fetching tick-based
-//  timeframes causes a hard load error for users without the Expert plan.
-
-// ── Tier 1: 1-second (default) ──────────────────────────────────────────────
-[secClose, secOpen, secHigh, secLow, secVolume] =
-  request.security_lower_tf(syminfo.tickerid, "1S", [close, open, high, low, volume])
-
-// ── Tier 2: 1-minute (fallback) ─────────────────────────────────────────────
-[minClose, minOpen, minHigh, minLow, minVolume] =
-  request.security_lower_tf(syminfo.tickerid, "1", [close, open, high, low, volume])
-
-// ── Cascade resolution ───────────────────────────────────────────────────────
-bool secHasData = secClose.size() > 0
-bool minHasData = minClose.size() > 0
-
-bool useSec     = secHasData
-bool useMin     = not secHasData and minHasData
-bool useChaikin = not secHasData and not minHasData
-
-array<float> ltfClose  = useSec ? secClose  : minClose
-array<float> ltfOpen   = useSec ? secOpen   : minOpen
-array<float> ltfHigh   = useSec ? secHigh   : minHigh
-array<float> ltfLow    = useSec ? secLow    : minLow
-array<float> ltfVolume = useSec ? secVolume : minVolume
-
-// Dashboard label and intrabar count
-string activeEngine = useSec ? "1S" : useMin ? "1m ⚠️" : "CHAIKIN ✖"
-int    intraCount   = ltfClose.size()
-bool   hasIntra     = intraCount > 0
-
-// ── Process intrabars ───────────────────────────────────────────────────────
-float intraBuyVol  = 0.0
-float intraSellVol = 0.0
-float maxIntraVol  = 0.0
-
-if hasIntra
-    for i = 0 to intraCount - 1
-        float c = ltfClose.get(i)
-        float o = ltfOpen.get(i)
-        float h = ltfHigh.get(i)
-        float l = ltfLow.get(i)
-        float v = ltfVolume.get(i)
-        float ibRange = h - l
-
-        maxIntraVol := math.max(maxIntraVol, v)
-
-        // Buying/Selling Pressure classification
-        bool isBuy = false
-        if ibRange > 0
-            isBuy := (c - l) > (h - c)
-        else
-            float prevC = i > 0 ? ltfClose.get(i - 1) : o
-            isBuy := c >= prevC
-
-        if isBuy
-            intraBuyVol += v
-        else
-            intraSellVol += v
-
-// ── Chaikin MFM ─────────────────────────────────────────────────────────────
-//  Pure OHLCV formula — no external data requests.
-//  Produces IDENTICAL results on every render, every zoom, every scroll.
-//  Used as the SOLE basis for signal detection (see WHY below).
-float barRange    = high - low
-float mfm         = barRange > 0 ? ((close - low) - (high - close)) / barRange : 0.0
-float chaikinBuy  = volume * (1.0 + mfm) / 2.0
-float chaikinSell = volume * (1.0 - mfm) / 2.0
-
-// ── WHY Chaikin drives detection, not intrabar data ─────────────────────────
-//  request.security_lower_tf() has a hard 100K total intrabar limit across
-//  ALL bars currently loaded in the chart. When you zoom or scroll,
-//  TradingView loads/unloads bars, redistributing that 100K limit.
-//  A bar that had 1S data at one zoom level can lose it at another.
-//  When intrabar data changes → delta changes → signal fires on a different
-//  bar → bubble appears to move or disappear.
-//
-//  Chaikin is computed from open/high/low/close/volume — values that are
-//  FIXED for any historical bar regardless of chart state. Signals driven by
-//  Chaikin are therefore identical on every render. Bubbles never move.
-//
-//  Intrabar data (below) is kept ONLY for the dashboard buy/sell display.
-
-// ── Intrabar data — dashboard display only ───────────────────────────────────
-float buyVol  = hasIntra ? intraBuyVol  : chaikinBuy
-float sellVol = hasIntra ? intraSellVol : chaikinSell
-float delta   = buyVol - sellVol   // dashboard display only
-
-// ── Signal detection — Chaikin only ─────────────────────────────────────────
-float sigDelta    = chaikinBuy - chaikinSell
-float sigAbsDelta = math.abs(sigDelta)
-
-// ── Statistics ──────────────────────────────────────────────────────────────
-float atr          = ta.atr(i_atrLen)
-float avgAbsDelta  = ta.sma(sigAbsDelta, i_lookback)
-float avgVolume    = ta.sma(volume, i_lookback)
-float volStdev     = ta.stdev(volume, i_lookback)
-
+float delta    = bV - sV
+float absDelta = math.abs(delta)
 
 // ─────────────────────────────────────────────────────────────────────────────
-// EXHAUSTION / ABSORPTION DETECTION
+// --- CORE LOGIC: SIGNAL DETECTION ---
 // ─────────────────────────────────────────────────────────────────────────────
+float atr  = ta.atr(14)
+float avgV = ta.sma(volume, i_look)[1]
+float stdV = ta.stdev(volume, i_look)[1]
+float avgD = ta.sma(absDelta, i_look)[1]
+float stdD = ta.stdev(absDelta, i_look)[1]
 
-// ── Exhaustion ──────────────────────────────────────────────────────────────
-//  High delta (aggressive orders) + tiny price movement.
-//  Aggressors fired heavy but the passive side ate every contract.
-//  The candle body and wicks are compressed relative to ATR.
+float vThres = nz(avgV) + nz(stdV) * sigma
+float dThres = nz(avgD) + nz(stdD) * sigma
 
-bool exhDeltaOk  = sigAbsDelta > avgAbsDelta * deltaMult_exh
-bool exhRangeOk  = barRange < atr * priceFactor_exh and barRange > 0
-bool exhVolOk    = volume > avgVolume * volMult_exh
+// 1. ABSORPTION (Institutional Passive Orders)
+bool absBull = absDelta > dThres and delta < 0 and close > open and volume > vThres
+bool absBear = absDelta > dThres and delta > 0 and close < open and volume > vThres
 
-// Gate on valid statistics — prevents noise during warm-up on any timeframe
-bool statsReady_det = not na(avgAbsDelta) and avgAbsDelta > 0
-                      and not na(avgVolume) and avgVolume > 0
+// 2. EXHAUSTION (Aggressive Move Failed)
+float bodySize = math.abs(close - open)
+float totalRange = high - low
+bool isSmallBody = bodySize < (totalRange * bodyP)
+bool exhBull = volume > vThres and delta < 0 and isSmallBody and close < open[1] and low < low[1]
+bool exhBear = volume > vThres and delta > 0 and isSmallBody and close > open[1] and high > high[1]
 
-bool isExhaustion = statsReady_det and exhDeltaOk and exhRangeOk and exhVolOk
-
-bool exhaustBuy  = isExhaustion and sigDelta > 0  // Buyers exhausted → potential top
-bool exhaustSell = isExhaustion and sigDelta < 0  // Sellers exhausted → potential bottom
-
-// ── Absorption ──────────────────────────────────────────────────────────────
-//  Candle body direction contradicts Chaikin delta direction.
-//  Red candle but close is in upper half of range = hidden buying.
-//  Green candle but close is in lower half of range = hidden selling.
-
-bool absVolOk   = volume > avgVolume * volMult_abs
-
-bool absorbBull = statsReady_det and close < open and sigDelta > avgAbsDelta * deltaMult_abs and absVolOk
-bool absorbBear = statsReady_det and close > open and sigDelta < -(avgAbsDelta * deltaMult_abs) and absVolOk
-
-// ── Strong signal classification (3-5 contract quality) ─────────────────────
-bool strongExhBuy  = exhaustBuy  and sigAbsDelta > avgAbsDelta * strongDeltaMult
-                     and volume > avgVolume * strongVolMult
-bool strongExhSell = exhaustSell and sigAbsDelta > avgAbsDelta * strongDeltaMult
-                     and volume > avgVolume * strongVolMult
-bool strongAbsBull = absorbBull  and sigAbsDelta > avgAbsDelta * strongDeltaMult
-                     and volume > avgVolume * strongVolMult
-bool strongAbsBear = absorbBear  and sigAbsDelta > avgAbsDelta * strongDeltaMult
-                     and volume > avgVolume * strongVolMult
-
-// Combined signal flags
-bool anySignal     = exhaustBuy or exhaustSell or absorbBull or absorbBear
-bool anyStrong     = strongExhBuy or strongExhSell or strongAbsBull or strongAbsBear
-
+bool sBull = absBull or exhBull
+bool sBear = absBear or exhBear
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BUBBLE RENDERING
+// --- STRATEGY & REVERSAL PROBABILITY ---
 // ─────────────────────────────────────────────────────────────────────────────
-//
-//  Bubbles are "●" characters rendered as labels with integer text_size.
-//  Positioned at the wick extremes where the E/A event occurred:
-//    Exhaustion (buy / potential top)  → sits at HIGH
-//    Exhaustion (sell / potential bottom) → sits at LOW
-//    Absorption (bull / hidden demand) → sits at LOW
-//    Absorption (bear / hidden supply) → sits at HIGH
-//
-//  Bubble SIZE is proportional to the bar's volume relative to average.
-//  Bigger volume = bigger bubble = bigger institutional footprint.
-//
-//  Strong signals get a ring: "◉" instead of "●"
+if sBull
+    strategy.entry("L", strategy.long, comment = absBull ? "ABS" : "EXH")
+if sBear
+    strategy.entry("S", strategy.short, comment = absBear ? "ABS" : "EXH")
+
+float tpMult = (i_mode == "Gold" ? 2.0 : 1.5)
+strategy.exit("XL", "L", stop = strategy.position_avg_price - atr * 1.5, limit = strategy.position_avg_price + atr * tpMult)
+strategy.exit("XS", "S", stop = strategy.position_avg_price + atr * 1.5, limit = strategy.position_avg_price - atr * tpMult)
+
+float winRate = strategy.closedtrades > 0 ? float(strategy.wintrades) / strategy.closedtrades * 100 : 0.0
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BUBBLE RENDERING — plotshape / location.absolute
+// --- VISUALS & DASHBOARD (SMALL & SIMPLE) ---
 // ─────────────────────────────────────────────────────────────────────────────
-//
-//  WHY plotshape AND NOT label.new:
-//    plotshape with location.absolute is anchored to bar price data by
-//    TradingView's charting engine. It cannot drift or reposition.
-//    label.new is a floating overlay object that re-renders every paint
-//    cycle — any scroll, zoom, or realtime tick can shift its position.
-//
-//  COLOR CONVENTION:
-//    Bullish E/A (signal = up)  → green  — exhaustSell + absorbBull
-//    Bearish E/A (signal = down) → red   — exhaustBuy  + absorbBear
-//
-//  SIZE:
-//    Normal signal → size.tiny   |   Strong signal → size.small
-//
-//  POSITION:
-//    Bearish signals → upper wick midpoint (high+body_top)/2
-//    Bullish signals → lower wick midpoint (low+body_bot)/2
+plotshape(absBull ? low : na, "ABS Bull", shape.diamond, location.belowbar, C_BULL, 0, "ABS", C_BULL, true, size.small)
+plotshape(absBear ? high : na, "ABS Bear", shape.diamond, location.abovebar, C_BEAR, 0, "ABS", C_BEAR, true, size.small)
+plotshape(exhBull ? low : na, "EXH Bull", shape.circle,  location.belowbar, C_BULL, 0, "EXH", C_BULL, true, size.small)
+plotshape(exhBear ? high : na, "EXH Bear", shape.circle,  location.abovebar, C_BEAR, 0, "EXH", C_BEAR, true, size.small)
 
-// Wick midpoints — series, evaluated every bar at global scope
-float ps_bodyTop = math.max(open, close)
-float ps_bodyBot = math.min(open, close)
-float ps_upper   = high > ps_bodyTop ? (high + ps_bodyTop) / 2 : high
-float ps_lower   = low  < ps_bodyBot ? (low  + ps_bodyBot) / 2 : low
+// Tiny Simplified Dashboard
+var table dash = table.new(position.top_right, 2, 2, bgcolor = #151924, border_color = #363a45, border_width = 1)
+if barstate.islast
+    color pColor = winRate > 50 ? C_BULL : winRate > 40 ? #FFD600 : C_BEAR
+    table.cell(dash, 0, 0, "PROB:", text_color = #808080, text_size = size.tiny)
+    table.cell(dash, 1, 0, str.tostring(winRate, "##.##") + "%", text_color = pColor, text_size = size.tiny)
+    table.cell(dash, 0, 1, "DLTA:", text_color = #808080, text_size = size.tiny)
+    table.cell(dash, 1, 1, str.tostring(delta, "#"), text_color = delta > 0 ? C_BULL : C_BEAR, text_size = size.tiny)
 
-// Signal price series — na suppresses the shape on that bar
-float bull_norm   = (exhaustSell or absorbBull) and not (strongExhSell or strongAbsBull) ? ps_lower : na
-float bull_strong = (strongExhSell or strongAbsBull)                                     ? ps_lower : na
-float bear_norm   = (exhaustBuy  or absorbBear) and not (strongExhBuy  or strongAbsBear) ? ps_upper : na
-float bear_strong = (strongExhBuy  or strongAbsBear)                                     ? ps_upper : na
-
-int alphaStrong = math.max(0, i_bubbleAlpha - 30)
-
-plotshape(bull_norm,   "", shape.circle, location.absolute, color.new(color.green, i_bubbleAlpha), size = size.tiny)
-plotshape(bull_strong, "", shape.circle, location.absolute, color.new(color.green, alphaStrong),   size = size.small)
-plotshape(bear_norm,   "", shape.circle, location.absolute, color.new(color.red,   i_bubbleAlpha), size = size.tiny)
-plotshape(bear_strong, "", shape.circle, location.absolute, color.new(color.red,   alphaStrong),   size = size.small)
-
-
-// ─────────────────────────────────────────────────────────────────────────────
-// S/R ZONE ENGINE — Automatic from E/A Clusters
-// ─────────────────────────────────────────────────────────────────────────────
-//
-//  CONCEPT: Where exhaustion/absorption has occurred before, it is likely
-//  to occur again. Institutional participants defend the same price levels.
-//  By clustering historical E/A events within an ATR fraction, we identify
-//  zones where passive orders have repeatedly absorbed aggressive orders.
-//
-//  ALGORITHM:
-//    1. Store every E/A event's price, volume, type, and bar index
-//    2. Every N bars, rebuild zones by clustering nearby events
-//    3. Draw semi-transparent boxes at zones with 2+ events
-//    4. Weight zones by event count × total volume × recency
-//    5. Cap total zones to avoid chart clutter
-//    6. Zones auto-expire when price trades through them decisively
-
-var array<EAEvent> eaHistory = array.new<EAEvent>()
-var array<SRZone>  srZones   = array.new<SRZone>()
-
-// ── Store new E/A events ────────────────────────────────────────────────────
-if anySignal
-    int evType = exhaustBuy ? 1 : exhaustSell ? 2 : absorbBull ? 3 : 4
-    float evPrice = (evType == 1 or evType == 4) ? high : low
-    bool isStr = anyStrong
-    eaHistory.push(EAEvent.new(bar_index, evPrice, volume, sigAbsDelta, evType, isStr))
-
-// ── Prune old events ────────────────────────────────────────────────────────
-while eaHistory.size() > 0
-    EAEvent oldest = eaHistory.get(0)
-    if bar_index - oldest.barIdx > i_zoneHistory
-        eaHistory.remove(0)
-    else
-        break
-
-// ── Rebuild zones every 5 bars (performance) ────────────────────────────────
-bool rebuildZones = i_showZones and bar_index % 5 == 0 and eaHistory.size() >= i_zoneMinEvents
-
-if rebuildZones
-    // Delete old zone boxes
-    for z in srZones
-        box.delete(z.bx)
-    srZones.clear()
-
-    // ── Clustering: greedy nearest-neighbor ─────────────────────────────
-    //  Sort events by price (approximate: scan and group)
-    float clusterDist = atr * i_zoneCluster
-    array<bool> assigned = array.new<bool>(eaHistory.size(), false)
-
-    for i = 0 to eaHistory.size() - 1
-        if assigned.get(i)
-            continue
-
-        EAEvent seed = eaHistory.get(i)
-        float sumPrice   = seed.price
-        float sumVol     = seed.volume
-        int   count      = 1
-        int   latestBar  = seed.barIdx
-        int   firstBar   = seed.barIdx  // track the zone's historical origin
-        // eventType: 1=exhBuy(bearish), 2=exhSell(bullish), 3=absBull(bullish), 4=absBear(bearish)
-        bool  hasBullish = seed.eventType == 2 or seed.eventType == 3
-        bool  hasBearish = seed.eventType == 1 or seed.eventType == 4
-        bool  hasStrong  = seed.isStrong
-        assigned.set(i, true)
-
-        // Find all events near this seed
-        for j = i + 1 to math.max(i + 1, eaHistory.size() - 1)
-            if j >= eaHistory.size() or assigned.get(j)
-                continue
-            EAEvent ev = eaHistory.get(j)
-            if math.abs(ev.price - seed.price) <= clusterDist
-                sumPrice  += ev.price
-                sumVol    += ev.volume
-                count     += 1
-                latestBar := math.max(latestBar, ev.barIdx)
-                firstBar  := math.min(firstBar,  ev.barIdx)
-                if ev.eventType == 2 or ev.eventType == 3
-                    hasBullish := true
-                if ev.eventType == 1 or ev.eventType == 4
-                    hasBearish := true
-                if ev.isStrong
-                    hasStrong := true
-                assigned.set(j, true)
-
-        if count >= i_zoneMinEvents
-            float center = sumPrice / count
-            float halfHeight = clusterDist * 0.5
-            if hasStrong
-                halfHeight *= 0.8  // Tighter zone for strong signals
-
-            // Zone color matches bubble convention: green = bullish, red = bearish
-            // Mixed (both directions at same level) = orange — strongest confluence
-            color zColor = hasBullish and hasBearish ? color.orange :
-                           hasBullish                ? color.green  : color.red
-
-            // Transparency: more events = more opaque
-            int zAlpha      = math.max(75, 95 - count * 5)
-            int borderAlpha = math.max(30, 70 - count * 8)
-
-            // Left edge = firstBar (zone's historical origin, not just latest event)
-            // Right edge = 100 bars ahead; updated every bar by the extension loop below
-            box bx = box.new(firstBar, center + halfHeight,
-              bar_index + 100, center - halfHeight,
-              border_color = color.new(zColor, borderAlpha),
-              bgcolor      = color.new(zColor, zAlpha),
-              border_width = hasStrong ? 2 : 1,
-              border_style = line.style_solid)
-
-            srZones.push(SRZone.new(bx, center, center + halfHeight,
-              center - halfHeight, count, sumVol, latestBar))
-
-    // ── Sort zones by strength and cap ──────────────────────────────────
-    //  Keep only the strongest zones (most events × most volume)
-    while srZones.size() > i_maxZones
-        // Find weakest zone (fewest events, then lowest volume)
-        int weakIdx = 0
-        float weakScore = 1e18
-        for i = 0 to srZones.size() - 1
-            SRZone z = srZones.get(i)
-            // Score: event count weighted by recency
-            float recency = 1.0 + (bar_index - z.lastBar) / i_zoneHistory
-            float score = z.eventCount * z.totalVol / recency
-            if score < weakScore
-                weakScore := score
-                weakIdx   := i
-        SRZone weak = srZones.get(weakIdx)
-        box.delete(weak.bx)
-        srZones.remove(weakIdx)
-
-// ── Extend active zones rightward each bar ──────────────────────────────────
-if i_showZones
-    for z in srZones
-        box.set_right(z.bx, bar_index + 100)
-
-
-// ─────────────────────────────────────────────────────────────────────────────
-// DASHBOARD
-// ─────────────────────────────────────────────────────────────────────────────
-
-var table dash = na
-
-if i_showDash
-    dashPos = switch i_dashPos
-        "Top Left"     => position.top_left
-        "Top Right"    => position.top_right
-        "Bottom Left"  => position.bottom_left
-        "Bottom Right" => position.bottom_right
-        => position.top_right
-
-    if na(dash)
-        dash := table.new(dashPos, 2, 10,
-          bgcolor      = color.new(C_DASH_BG, 5),
-          border_color = color.new(C_NEUTRAL, 60),
-          border_width = 1,
-          frame_color  = color.new(C_NEUTRAL, 40),
-          frame_width  = 1)
-
-    // Header
-    string modeStr = i_mode == "YM" ? "YM MODE" : "GOLD RUSH"
-    table.cell(dash, 0, 0, "DF³", text_color = C_DASH_HEAD, text_size = 12,
-      text_halign = text.align_left)
-    table.cell(dash, 1, 0, modeStr, text_color = C_DASH_HEAD, text_size = 11,
-      text_halign = text.align_right)
-
-    // Symbol
-    table.cell(dash, 0, 1, "Symbol", text_color = C_DASH_TXT, text_size = 10)
-    table.cell(dash, 1, 1, syminfo.tickerid, text_color = C_DASH_TXT, text_size = 10)
-
-    // Delta
-    color dClr = delta > 0 ? C_ABS_BULL : delta < 0 ? C_ABS_BEAR : C_NEUTRAL
-    string deltaStr = (delta > 0 ? "+" : "") + str.tostring(delta, "#.#")
-    table.cell(dash, 0, 2, "Δ Delta", text_color = C_DASH_TXT, text_size = 10)
-    table.cell(dash, 1, 2, deltaStr, text_color = dClr, text_size = 11)
-
-    // Buy / Sell Vol
-    float totalV = buyVol + sellVol
-    float buyPct = totalV > 0 ? buyVol / totalV * 100 : 50
-    table.cell(dash, 0, 3, "Buy|Sell", text_color = C_DASH_TXT, text_size = 10)
-    table.cell(dash, 1, 3,
-      str.tostring(buyPct, "#.0") + "% | " + str.tostring(100 - buyPct, "#.0") + "%",
-      text_color = buyPct > 50 ? C_ABS_BULL : C_ABS_BEAR, text_size = 10)
-
-    // Volume ratio
-    float volRatio = avgVolume > 0 ? volume / avgVolume : 1
-    color vClr = volRatio > 2.0 ? C_EXH_BUY : volRatio > 1.3 ? C_DASH_HEAD : C_NEUTRAL
-    table.cell(dash, 0, 4, "Vol Ratio", text_color = C_DASH_TXT, text_size = 10)
-    table.cell(dash, 1, 4, str.tostring(volRatio, "#.##") + "×",
-      text_color = vClr, text_size = 11)
-
-    // Current signal
-    string sigStr = "—"
-    color  sigClr = C_NEUTRAL
-    if exhaustBuy
-        sigStr := strongExhBuy ? "★ EXH BUY" : "EXH BUY"
-        sigClr := color.red
-    else if exhaustSell
-        sigStr := strongExhSell ? "★ EXH SELL" : "EXH SELL"
-        sigClr := color.green
-    else if absorbBull
-        sigStr := strongAbsBull ? "★ ABS BULL" : "ABS BULL"
-        sigClr := color.green
-    else if absorbBear
-        sigStr := strongAbsBear ? "★ ABS BEAR" : "ABS BEAR"
-        sigClr := color.red
-
-    table.cell(dash, 0, 5, "Signal", text_color = C_DASH_TXT, text_size = 10)
-    table.cell(dash, 1, 5, sigStr, text_color = sigClr, text_size = 12)
-
-    // Engine — shows which tier is ACTUALLY driving calculations
-    //  Teal   = 1T tick data  (best possible — you have the tick plan)
-    //  Green  = 1S second data (default — working correctly)
-    //  Orange = 1m fallback  (no second-level plan — lower precision)
-    //  Red    = Chaikin       (no intrabar data at all — something is wrong)
-    color engineClr = useSec ? C_ABS_BULL : useMin ? C_DASH_HEAD : color.red
-    table.cell(dash, 0, 6, "Engine", text_color = C_DASH_TXT, text_size = 10)
-    table.cell(dash, 1, 6, str.tostring(intraCount) + " × " + activeEngine,
-      text_color = engineClr, text_size = 10)
-
-    // Active E/A events in memory
-    table.cell(dash, 0, 7, "E/A Events", text_color = C_DASH_TXT, text_size = 10)
-    table.cell(dash, 1, 7, str.tostring(eaHistory.size()),
-      text_color = color.new(C_DASH_TXT, 20), text_size = 10)
-
-    // Active zones
-    table.cell(dash, 0, 8, "S/R Zones", text_color = C_DASH_TXT, text_size = 10)
-    table.cell(dash, 1, 8, str.tostring(srZones.size()),
-      text_color = color.orange, text_size = 10)
-
-    // ATR
-    table.cell(dash, 0, 9, "ATR(" + str.tostring(i_atrLen) + ")",
-      text_color = C_DASH_TXT, text_size = 10)
-    table.cell(dash, 1, 9, str.tostring(atr, "#.##"),
-      text_color = C_NEUTRAL, text_size = 10)
-
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ALERTS
-// ─────────────────────────────────────────────────────────────────────────────
-
-// Standard signals
-alertcondition(exhaustBuy, "Exhaustion — Buy Side",
-  "⚡ BUY EXHAUSTION at {{close}}: heavy buying absorbed. Potential top.")
-alertcondition(exhaustSell, "Exhaustion — Sell Side",
-  "⚡ SELL EXHAUSTION at {{close}}: heavy selling absorbed. Potential bottom.")
-alertcondition(absorbBull, "Absorption — Bullish",
-  "🛡 BULL ABSORPTION at {{close}}: hidden buy demand under red candle.")
-alertcondition(absorbBear, "Absorption — Bearish",
-  "🛡 BEAR ABSORPTION at {{close}}: hidden sell supply under green candle.")
-
-// Strong signals (3-5 contract quality)
-alertcondition(strongExhBuy, "★ STRONG Exhaustion — Buy Side",
-  "⚡★ STRONG BUY EXHAUSTION at {{close}}: extreme delta absorbed. HIGH PROBABILITY top.")
-alertcondition(strongExhSell, "★ STRONG Exhaustion — Sell Side",
-  "⚡★ STRONG SELL EXHAUSTION at {{close}}: extreme delta absorbed. HIGH PROBABILITY bottom.")
-alertcondition(strongAbsBull, "★ STRONG Absorption — Bullish",
-  "🛡★ STRONG BULL ABSORPTION at {{close}}: massive hidden demand. HIGH PROBABILITY reversal up.")
-alertcondition(strongAbsBear, "★ STRONG Absorption — Bearish",
-  "🛡★ STRONG BEAR ABSORPTION at {{close}}: massive hidden supply. HIGH PROBABILITY reversal down.")
-
-// Any strong signal (one alert for all)
-alertcondition(anyStrong, "★ ANY Strong Signal",
-  "★ HIGH PROBABILITY E/A signal at {{close}}. Check chart for type and direction.")
-
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// END OF DEEPFLOW v3.0
-// ═══════════════════════════════════════════════════════════════════════════════
+// Institutional S/R Clusters
+var box[] zB = array.new<box>()
+if sBull or sBear
+    float d = atr * 0.4
+    color bc = sBull ? C_BULL : C_BEAR
+    box b = box.new(bar_index, (sBull ? low : high) + d/2, bar_index + 10, (sBull ? low : high) - d/2, 
+      bgcolor = color.new(bc, 95), border_color = color.new(bc, 85), extend = extend.right)
+    array.push(zB, b)
+    if array.size(zB) > 10
+        box.delete(array.shift(zB))
