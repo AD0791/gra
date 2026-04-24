@@ -12,48 +12,49 @@
 //
 //    DeepFlow v5.2 — Order Flow Alpha (Institutional Calibration)
 //    Precision: 1-Tick / 1-Second / 1-Minute Delta Analysis
-//    Asset Optimization: MYM (Dow), MGC (Gold), MNQ (Nasdaq)
 //
 // ═══════════════════════════════════════════════════════════════════════════════
 
 //@version=6
-strategy("DeepFlow v5.2 — Order Flow Strategy", "DF⁵ Alpha", overlay = true, max_boxes_count = 500, max_labels_count = 500, initial_capital = 10000, default_qty_type = strategy.percent_of_equity, default_qty_value = 10)
+indicator("DeepFlow v5.2 — Order Flow", "DF⁵ Alpha", overlay = true, max_boxes_count = 500, max_labels_count = 500)
 
 // ─────────────────────────────────────────────────────────────────────────────
+// --- CALIBRATION BLUEPRINT FOR HTF/LTF WORKFLOW ---
+// 1. HTF CONTEXT (1H / 2H / 4H):
+//    - Focus: "ABS" (Absorption) Diamond signals and the S/R Boxes.
+//    - Goal: Identify where "Passive Institutional Buyers" are sitting.
+//    - Setting: Use higher Sigma (2.5 - 3.0) to filter only the most significant walls.
+//
+// 2. LTF EXECUTION (15M / 30M / 45M):
+//    - Focus: "EXH" (Exhaustion) Circle signals and CVD Trend.
+//    - Goal: Wait for price to touch an HTF S/R Box, then look for an EXH signal.
+//    - Setting: Use standard Sigma (2.0 - 2.2).
+//
+// 3. ENGINE CHOICE:
+//    - If your PC/Connection allows, keep '1T' (Tick) selected. This calculates
+//      the internal Buy/Sell split within the bar regardless of the chart TF.
+// ─────────────────────────────────────────────────────────────────────────────
+
 // --- 1. ENGINE CALIBRATION ---
-// Calibration Goal: Match your TradingView plan to data speed.
-// Higher precision (1T/1S) allows you to see "hidden" absorption before it prints.
-// ─────────────────────────────────────────────────────────────────────────────
-string G_ENGINE = "⚙️ Delta Engine"
-string i_res    = input.string("1T", "Primary Delta Source", options = ["1T", "1S", "1"], group = G_ENGINE, tooltip = "CALIBRATION: Use '1T' for Ticks (Elite), '1S' for Seconds (Premium), or '1' for standard minutes.")
+string G_ENGINE = "⚙️ Delta Engine (Calculation Logic)"
+string i_res    = input.string("1T", "Primary Delta Source", options = ["1T", "1S", "1"], group = G_ENGINE, tooltip = "CRITICAL: This is the 'magnifying glass'. \n\n'1T' (Tick) looks at every price change. \n'1S' (Second) is a compromise. \n'1' (Minute) is the baseline. \n\nAlways use 1T if your plan supports it for maximum accuracy in the 'ABS' signals.")
+string i_cvdMode = input.string("Raw", "CVD Calculation", options = ["Raw", "Percentage"], group = G_ENGINE, tooltip = "RAW: Shows the net volume gap. \nPERCENTAGE: Normalizes the gap. \n\nUse PERCENTAGE on 1H charts to see if the current move is 'flow-exhausted' (e.g., >10% buying pressure typically stalls).")
 
-// ─────────────────────────────────────────────────────────────────────────────
-// --- 2. ASSET VOLATILITY OPTIMIZATION ---
-// Calibration Goal: Adjust thresholds for different volatility profiles.
-// GOLD: High Sigma (2.5+) filters out common spikes.
-// NASDAQ: Lower Sigma (2.0) captures fast momentum shifts.
-// DOW: Balanced Sigma (2.2) captures clean institutional blocks.
-// ─────────────────────────────────────────────────────────────────────────────
-string G_ASSET  = "🎯 Asset Presets"
-string i_mode   = input.string("Gold", "Select Asset Profile", options = ["Gold", "Nasdaq", "Dow"], group = G_ASSET, tooltip = "CALIBRATION: This changes internal multipliers for Sigma and Body % to match typical volatility for XAU/MGC vs Indices.")
+// --- 2. ASSET VOLATILITY ---
+string G_ASSET  = "🎯 Asset Profile (Volatility Scaling)"
+string i_mode   = input.string("Gold", "Select Asset Profile", options = ["Gold", "Nasdaq", "Dow"], group = G_ASSET, tooltip = "GOLD: Increases sensitivity and sigma for high-volatility spikes. \nNASDAQ: Calibrated for fast-moving tech momentum. \nDOW: Calibrated for stable institutional rotation.")
 
-// ─────────────────────────────────────────────────────────────────────────────
-// --- 3. SIGNAL SENSITIVITY (SIGMA) ---
-// Calibration Goal: Filter 'Market Noise' from 'Institutional Blocks'.
-// If signals are too frequent: Increase Sigma (e.g., 3.0).
-// If signals are too rare: Decrease Sigma (e.g., 1.5).
-// ─────────────────────────────────────────────────────────────────────────────
-string G_SIGNAL = "🔬 Sensitivity Tuning"
-float  i_sigmaInput = input.float(2.2, "Signal Sigma", minval = 1.0, maxval = 5.0, step = 0.1, group = G_SIGNAL, tooltip = "CALIBRATION: Higher = Only the 'Extreme' volume/delta spikes are shown.")
-int    i_look       = input.int(20, "Stat. Lookback", minval = 10, group = G_SIGNAL, tooltip = "CALIBRATION: How many bars are used to determine 'Average' volume.")
-float  i_bodyInput  = input.float(0.3, "Max Body % (Exhaustion)", minval = 0.1, maxval = 0.6, group = G_SIGNAL, tooltip = "CALIBRATION: Lower = Exhaustion signals require smaller candle bodies (tighter pin bars).")
+// --- 3. SENSITIVITY ---
+string G_SIGNAL = "🔬 Sensitivity Tuning (The Filter)"
+float  i_sigmaInput = input.float(2.2, "Signal Sigma (Quality Gate)", minval = 1.0, maxval = 5.0, step = 0.1, group = G_SIGNAL, tooltip = "This is the most important setting. \n\n2.0: Aggressive. More signals, more noise. \n3.0: Institutional. Only the massive blocks show up. \n\nRecommendation: Use 2.8 on 4H charts and 2.2 on 15M charts.")
+int    i_look       = input.int(20, "Stat. Lookback", minval = 10, group = G_SIGNAL, tooltip = "How many bars to compare against. 20 is the standard for institutional volume analysis.")
+float  i_bodyInput  = input.float(0.3, "Max Body % (Exhaustion)", minval = 0.1, maxval = 0.6, group = G_SIGNAL, tooltip = "Used for EXH signals. \n\n0.3 means the candle 'body' must be less than 30% of its total range (wicks must be large). This detects 'Pin Bars' where aggressive orders failed to move the price.")
 
 // Colors
 color C_BULL = #089981 // Green
 color C_BEAR = #f23645 // Red
-color C_NEUT = #2962FF // Blue
 
-// --- Apply Asset Presets ---
+// --- Internal Math for Scaling ---
 float sigma = i_sigmaInput * (i_mode == "Gold" ? 1.15 : i_mode == "Nasdaq" ? 0.9 : 1.0)
 float bodyP = i_bodyInput  * (i_mode == "Gold" ? 0.8 : i_mode == "Nasdaq" ? 1.2 : 1.0)
 
@@ -68,18 +69,27 @@ get_delta() =>
 [it_b1, it_s1] = request.security_lower_tf(syminfo.tickerid, i_res, get_delta())
 [it_b2, it_s2] = request.security_lower_tf(syminfo.tickerid, "1", get_delta())
 
-float bV = 0.0, float sV = 0.0, int eng = 0
+float bV = 0.0, float sV = 0.0
 
 if array.size(it_b1) > 0
-    bV := array.sum(it_b1), sV := array.sum(it_s1), eng := 0
+    bV := array.sum(it_b1), sV := array.sum(it_s1)
 else if array.size(it_b2) > 0
-    bV := array.sum(it_b2), sV := array.sum(it_s2), eng := 1
+    bV := array.sum(it_b2), sV := array.sum(it_s2)
 else
     float r = high - low, mfv = r > 0 ? ((close - low) - (high - close)) / r : 0.0
-    bV := mfv > 0 ? mfv * volume : 0.0, sV := mfv < 0 ? math.abs(mfv) * volume : 0.0, eng := 2
+    bV := mfv > 0 ? mfv * volume : 0.0, sV := mfv < 0 ? math.abs(mfv) * volume : 0.0
 
 float delta    = bV - sV
+float totalV   = bV + sV
 float absDelta = math.abs(delta)
+
+// --- Cumulative Calculations ---
+var float cumDelta  = 0.0
+var float cumVolume = 0.0
+cumDelta  += delta
+cumVolume += totalV
+
+float displayCVD = i_cvdMode == "Raw" ? cumDelta : (cumDelta / cumVolume) * 100
 
 // ─────────────────────────────────────────────────────────────────────────────
 // --- CORE LOGIC: SIGNAL DETECTION ---
@@ -93,11 +103,11 @@ float stdD = ta.stdev(absDelta, i_look)[1]
 float vThres = nz(avgV) + nz(stdV) * sigma
 float dThres = nz(avgD) + nz(stdD) * sigma
 
-// 1. ABSORPTION (Institutional Passive Orders)
+// 1. ABSORPTION (Passive Orders) - Diamond Shape
 bool absBull = absDelta > dThres and delta < 0 and close > open and volume > vThres
 bool absBear = absDelta > dThres and delta > 0 and close < open and volume > vThres
 
-// 2. EXHAUSTION (Aggressive Move Failed)
+// 2. EXHAUSTION (Aggressive Failure) - Circle Shape
 float bodySize = math.abs(close - open)
 float totalRange = high - low
 bool isSmallBody = bodySize < (totalRange * bodyP)
@@ -107,38 +117,33 @@ bool exhBear = volume > vThres and delta > 0 and isSmallBody and close > open[1]
 bool sBull = absBull or exhBull
 bool sBear = absBear or exhBear
 
-// ─────────────────────────────────────────────────────────────────────────────
-// --- STRATEGY & REVERSAL PROBABILITY ---
-// ─────────────────────────────────────────────────────────────────────────────
-if sBull
-    strategy.entry("L", strategy.long, comment = absBull ? "ABS" : "EXH")
-if sBear
-    strategy.entry("S", strategy.short, comment = absBear ? "ABS" : "EXH")
-
-float tpMult = (i_mode == "Gold" ? 2.0 : 1.5)
-strategy.exit("XL", "L", stop = strategy.position_avg_price - atr * 1.5, limit = strategy.position_avg_price + atr * tpMult)
-strategy.exit("XS", "S", stop = strategy.position_avg_price + atr * 1.5, limit = strategy.position_avg_price - atr * tpMult)
-
-float winRate = strategy.closedtrades > 0 ? float(strategy.wintrades) / strategy.closedtrades * 100 : 0.0
+// --- Trend Pressure ---
+float pressureSma = ta.ema(delta, 20)
+string trendPressure = pressureSma > 0 ? "BUY" : "SELL"
+color pressureColor = pressureSma > 0 ? C_BULL : C_BEAR
 
 // ─────────────────────────────────────────────────────────────────────────────
-// --- VISUALS & DASHBOARD (SMALL & SIMPLE) ---
+// --- VISUAL ELEMENTS ---
 // ─────────────────────────────────────────────────────────────────────────────
 plotshape(absBull ? low : na, "ABS Bull", shape.diamond, location.belowbar, C_BULL, 0, "ABS", C_BULL, true, size.small)
 plotshape(absBear ? high : na, "ABS Bear", shape.diamond, location.abovebar, C_BEAR, 0, "ABS", C_BEAR, true, size.small)
 plotshape(exhBull ? low : na, "EXH Bull", shape.circle,  location.belowbar, C_BULL, 0, "EXH", C_BULL, true, size.small)
 plotshape(exhBear ? high : na, "EXH Bear", shape.circle,  location.abovebar, C_BEAR, 0, "EXH", C_BEAR, true, size.small)
 
-// Tiny Simplified Dashboard
-var table dash = table.new(position.top_right, 2, 2, bgcolor = #151924, border_color = #363a45, border_width = 1)
+// Dashboard Table
+var table dash = table.new(position.top_right, 3, 2, bgcolor = #151924, border_color = #363a45, border_width = 1)
 if barstate.islast
-    color pColor = winRate > 50 ? C_BULL : winRate > 40 ? #FFD600 : C_BEAR
-    table.cell(dash, 0, 0, "PROB:", text_color = #808080, text_size = size.tiny)
-    table.cell(dash, 1, 0, str.tostring(winRate, "##.##") + "%", text_color = pColor, text_size = size.tiny)
-    table.cell(dash, 0, 1, "DLTA:", text_color = #808080, text_size = size.tiny)
-    table.cell(dash, 1, 1, str.tostring(delta, "#"), text_color = delta > 0 ? C_BULL : C_BEAR, text_size = size.tiny)
+    table.cell(dash, 0, 0, "CVD (" + i_cvdMode + ")", text_color = #808080, text_size = size.tiny)
+    table.cell(dash, 1, 0, "VOLUME",                  text_color = #808080, text_size = size.tiny)
+    table.cell(dash, 2, 0, "PRESSURE",                text_color = #808080, text_size = size.tiny)
+    
+    string cvdSign = displayCVD > 0 ? "+" : ""
+    string cvdStr  = i_cvdMode == "Raw" ? str.format("{0,number,#}", displayCVD) : str.format("{0,number,##.##}%", displayCVD)
+    table.cell(dash, 0, 1, cvdSign + cvdStr,   text_color = displayCVD >= displayCVD[1] ? C_BULL : C_BEAR, text_size = size.small)
+    table.cell(dash, 1, 1, str.format("{0,number,#}", totalV), text_color = delta > 0 ? C_BULL : C_BEAR, text_size = size.small)
+    table.cell(dash, 2, 1, trendPressure,      text_color = pressureColor, text_size = size.small)
 
-// Institutional S/R Clusters
+// Institutional S/R Boxes
 var box[] zB = array.new<box>()
 if sBull or sBear
     float d = atr * 0.4
