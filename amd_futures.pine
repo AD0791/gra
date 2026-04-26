@@ -1,3 +1,4 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 //@version=6
 indicator("AMD FVG Trade Setup — Futures Presets [LuxAlgo]", shorttitle="AMD Futures", overlay=true, max_boxes_count=500)
 
@@ -8,20 +9,16 @@ GRP_PRESET = "🎯 Asset Preset"
 i_asset = input.string("None", "Asset Preset", options=["None", "MNQ", "MGC", "MYM"], group=GRP_PRESET,
      tooltip="Selecting an asset loads calibrated defaults and overrides the AMD / Trade / Session settings below.")
 
-// Resolved preset values — callers below use these instead of raw inputs
-int    p_accLen   = i_asset == "MNQ" ? 20  : i_asset == "MGC" ? 30  : i_asset == "MYM" ? 25  : na
-float  p_accWidth = i_asset == "MNQ" ? 0.15 : i_asset == "MGC" ? 0.15 : i_asset == "MYM" ? 0.20 : na
-int    p_manLook  = i_asset == "MNQ" ? 10  : i_asset == "MGC" ? 15  : i_asset == "MYM" ? 12  : na
-float  p_fvgThr   = i_asset == "MNQ" ? 0.15 : i_asset == "MGC" ? 0.10 : i_asset == "MYM" ? 0.10 : na
-float  p_atrMult  = i_asset == "MNQ" ? 1.5 : i_asset == "MGC" ? 1.8 : i_asset == "MYM" ? 1.5 : na
-float  p_rrr      = i_asset == "MNQ" ? 2.5 : i_asset == "MGC" ? 2.0 : i_asset == "MYM" ? 2.0 : na
-
-// Session preset flags (na = no override, use manual toggles below)
-bool   p_useLondon = i_asset == "MGC"  ? true  : na
-bool   p_useNY     = i_asset == "None" ? na     : true
+// Resolved preset values — explicitly casting na to ensure type compatibility
+int    p_accLen   = i_asset == "MNQ" ? 20   : i_asset == "MGC" ? 30   : i_asset == "MYM" ? 25   : int(na)
+float  p_accWidth = i_asset == "MNQ" ? 0.15 : i_asset == "MGC" ? 0.15 : i_asset == "MYM" ? 0.20 : float(na)
+int    p_manLook  = i_asset == "MNQ" ? 10   : i_asset == "MGC" ? 15   : i_asset == "MYM" ? 12   : int(na)
+float  p_fvgThr   = i_asset == "MNQ" ? 0.15 : i_asset == "MGC" ? 0.10 : i_asset == "MYM" ? 0.10 : float(na)
+float  p_atrMult  = i_asset == "MNQ" ? 1.5  : i_asset == "MGC" ? 1.8  : i_asset == "MYM" ? 1.5  : float(na)
+float  p_rrr      = i_asset == "MNQ" ? 2.5  : i_asset == "MGC" ? 2.0  : i_asset == "MYM" ? 2.0  : float(na)
 
 // =============================================================================
-// Section 1 — User Inputs (active when preset = "None", shown as reference otherwise)
+// Section 1 — User Inputs
 // =============================================================================
 GRP_AMD = "AMD Logic"
 accLen       = input.int(30,  "Accumulation Length",       minval=5,   group=GRP_AMD)
@@ -59,8 +56,10 @@ eff_manLook  = not na(p_manLook)  ? p_manLook  : manLook
 eff_fvgThr   = not na(p_fvgThr)   ? p_fvgThr   : fvgThreshold
 eff_atrMult  = not na(p_atrMult)  ? p_atrMult  : atrMult
 eff_rrr      = not na(p_rrr)      ? p_rrr       : rrr
-eff_useLondon = not na(p_useLondon) ? p_useLondon : useLondon
-eff_useNY     = not na(p_useNY)     ? p_useNY     : useNY
+
+// Explicitly handle boolean overrides without na to satisfy strict typing
+eff_useLondon = i_asset == "MGC" ? true : useLondon
+eff_useNY     = i_asset != "None" ? true : useNY
 
 // =============================================================================
 // Section 3 — Session Logic
@@ -132,7 +131,7 @@ if isTradeActive
 // =============================================================================
 if not isAccumulating and not na(accHigh) and bar_index <= accEndBar + eff_manLook and isInAnySession
 
-    // Bearish
+    // Bearish logic
     if not manipOccurredHigh and not manipOccurredLow and high > accHigh
         manipOccurredHigh := true
         manipExtremum     := high
@@ -147,7 +146,7 @@ if not isAccumulating and not na(accHigh) and bar_index <= accEndBar + eff_manLo
             box.new(accEndBar, manipExtremum, bar_index - 2, accHigh, bgcolor=manColor, border_color=na)
             box.new(bar_index - 2, low[2], bar_index, high, bgcolor=fvgColor, border_color=fvgColor, border_style=line.style_dotted)
 
-            slDist        := atr * eff_atrMult
+            float slDist  = atr * eff_atrMult
             slLevel       := close + slDist
             tpLevel       := close - (slDist * eff_rrr)
             isTradeActive  := true
@@ -159,7 +158,7 @@ if not isAccumulating and not na(accHigh) and bar_index <= accEndBar + eff_manLo
             accHigh           := na
             manipOccurredHigh := false
 
-    // Bullish
+    // Bullish logic
     if not manipOccurredLow and not manipOccurredHigh and low < accLow
         manipOccurredLow  := true
         manipExtremum     := low
@@ -174,7 +173,7 @@ if not isAccumulating and not na(accHigh) and bar_index <= accEndBar + eff_manLo
             box.new(accEndBar, accLow, bar_index - 2, manipExtremum, bgcolor=manColorB, border_color=na)
             box.new(bar_index - 2, high[2], bar_index, low, bgcolor=fvgColor, border_color=fvgColor, border_style=line.style_dotted)
 
-            slDist        := atr * eff_atrMult
+            float slDist  = atr * eff_atrMult
             slLevel       := close - slDist
             tpLevel       := close + (slDist * eff_rrr)
             isTradeActive  := true
