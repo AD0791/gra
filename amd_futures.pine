@@ -1,0 +1,193 @@
+//@version=6
+indicator("AMD FVG Trade Setup — Futures Presets [LuxAlgo]", shorttitle="AMD Futures", overlay=true, max_boxes_count=500)
+
+// =============================================================================
+// Section 0 — Asset Preset (MGC / MYM / MNQ)
+// =============================================================================
+GRP_PRESET = "🎯 Asset Preset"
+i_asset = input.string("None", "Asset Preset", options=["None", "MNQ", "MGC", "MYM"], group=GRP_PRESET,
+     tooltip="Selecting an asset loads calibrated defaults and overrides the AMD / Trade / Session settings below.")
+
+// Resolved preset values — callers below use these instead of raw inputs
+int    p_accLen   = i_asset == "MNQ" ? 20  : i_asset == "MGC" ? 30  : i_asset == "MYM" ? 25  : na
+float  p_accWidth = i_asset == "MNQ" ? 0.15 : i_asset == "MGC" ? 0.15 : i_asset == "MYM" ? 0.20 : na
+int    p_manLook  = i_asset == "MNQ" ? 10  : i_asset == "MGC" ? 15  : i_asset == "MYM" ? 12  : na
+float  p_fvgThr   = i_asset == "MNQ" ? 0.15 : i_asset == "MGC" ? 0.10 : i_asset == "MYM" ? 0.10 : na
+float  p_atrMult  = i_asset == "MNQ" ? 1.5 : i_asset == "MGC" ? 1.8 : i_asset == "MYM" ? 1.5 : na
+float  p_rrr      = i_asset == "MNQ" ? 2.5 : i_asset == "MGC" ? 2.0 : i_asset == "MYM" ? 2.0 : na
+
+// Session preset flags (na = no override, use manual toggles below)
+bool   p_useLondon = i_asset == "MGC"  ? true  : na
+bool   p_useNY     = i_asset == "None" ? na     : true
+
+// =============================================================================
+// Section 1 — User Inputs (active when preset = "None", shown as reference otherwise)
+// =============================================================================
+GRP_AMD = "AMD Logic"
+accLen       = input.int(30,  "Accumulation Length",       minval=5,   group=GRP_AMD)
+accWidth     = input.float(0.2,"Accumulation Range Max %", minval=0.1, step=0.1, group=GRP_AMD)
+manLook      = input.int(10,  "Max Search Window",         minval=1,   group=GRP_AMD)
+fvgThreshold = input.float(0.1,"Min FVG Gap (ATR Multiplier)", minval=0.0, step=0.05, group=GRP_AMD,
+     tooltip="Minimum size of the FVG gap relative to ATR. Higher values require 'stronger' (larger) gaps.")
+
+GRP_TRADE = "Trade Settings"
+atrLen  = input.int(14,  "ATR Length",            group=GRP_TRADE)
+atrMult = input.float(2.0,"ATR SL Multiplier",    step=0.1, group=GRP_TRADE)
+rrr     = input.float(2.0,"Reward-to-Risk Ratio", step=0.1, group=GRP_TRADE)
+
+GRP_SESS = "Sessions"
+useSydney = input.bool(false, "🌏 Sydney Session (17:00-02:00 EST)", group=GRP_SESS)
+useTokyo  = input.bool(false, "🌏 Tokyo Session (19:00-04:00 EST)",  group=GRP_SESS)
+useLondon = input.bool(false, "🌍 London Session (03:00-12:00 EST)", group=GRP_SESS)
+useNY     = input.bool(true,  "🌎 New York Session (08:00-17:00 EST)", group=GRP_SESS)
+showSess  = input.bool(true,  "Highlight Active Session Time",        group=GRP_SESS)
+
+GRP_COL = "Colors"
+accColor  = input.color(color.new(color.gray, 80), "Accumulation",         group=GRP_COL)
+manColor  = input.color(color.new(#f23645, 75),    "Manipulation (Bear)",  group=GRP_COL)
+manColorB = input.color(color.new(#089981, 75),    "Manipulation (Bull)",  group=GRP_COL)
+tpColor   = input.color(color.new(#089981, 75),    "Take Profit Box",      group=GRP_COL)
+slColor   = input.color(color.new(#f23645, 75),    "Stop Loss Box",        group=GRP_COL)
+fvgColor  = input.color(color.new(color.white, 60),"FVG Color",            group=GRP_COL)
+
+// =============================================================================
+// Section 2 — Merge preset with manual inputs
+// =============================================================================
+eff_accLen   = not na(p_accLen)   ? p_accLen   : accLen
+eff_accWidth = not na(p_accWidth) ? p_accWidth : accWidth
+eff_manLook  = not na(p_manLook)  ? p_manLook  : manLook
+eff_fvgThr   = not na(p_fvgThr)   ? p_fvgThr   : fvgThreshold
+eff_atrMult  = not na(p_atrMult)  ? p_atrMult  : atrMult
+eff_rrr      = not na(p_rrr)      ? p_rrr       : rrr
+eff_useLondon = not na(p_useLondon) ? p_useLondon : useLondon
+eff_useNY     = not na(p_useNY)     ? p_useNY     : useNY
+
+// =============================================================================
+// Section 3 — Session Logic
+// =============================================================================
+inSession(sess) => not na(time(timeframe.period, sess, "America/New_York"))
+
+isInAnySession = (useSydney    and inSession("1700-0200")) or
+                 (useTokyo     and inSession("1900-0400")) or
+                 (eff_useLondon and inSession("0300-1200")) or
+                 (eff_useNY     and inSession("0800-1700"))
+
+bgcolor(showSess and isInAnySession ? color.new(color.blue, 96) : na)
+
+// =============================================================================
+// Section 4 — State
+// =============================================================================
+var float accHigh = na
+var float accLow  = na
+var int   accStartBar = na
+var int   accEndBar   = na
+var bool  manipOccurredHigh = false
+var bool  manipOccurredLow  = false
+var float manipExtremum = na
+
+var box   tpBox = na
+var box   slBox = na
+var float tpLevel = na
+var float slLevel = na
+var bool  isTradeActive  = false
+var bool  isBullishTrade = false
+
+// =============================================================================
+// Section 5 — Accumulation Detection
+// =============================================================================
+highs    = ta.highest(high, eff_accLen)
+lows     = ta.lowest(low,  eff_accLen)
+rangePct = (highs - lows) / lows * 100
+isAccumulating = rangePct <= eff_accWidth and isInAnySession
+
+if isAccumulating
+    accHigh         := highs
+    accLow          := lows
+    accStartBar     := bar_index - eff_accLen + 1
+    accEndBar       := bar_index
+    manipOccurredHigh := false
+    manipOccurredLow  := false
+    manipExtremum     := na
+
+// =============================================================================
+// Section 6 — ATR
+// =============================================================================
+atr = ta.atr(atrLen)
+
+// =============================================================================
+// Section 7 — Active Trade Box Extension & Exit Check
+// =============================================================================
+if isTradeActive
+    tpBox.set_right(bar_index)
+    slBox.set_right(bar_index)
+    if isBullishTrade
+        if low <= slLevel or high >= tpLevel
+            isTradeActive := false
+    else
+        if high >= slLevel or low <= tpLevel
+            isTradeActive := false
+
+// =============================================================================
+// Section 8 — Manipulation + FVG Search
+// =============================================================================
+if not isAccumulating and not na(accHigh) and bar_index <= accEndBar + eff_manLook and isInAnySession
+
+    // Bearish
+    if not manipOccurredHigh and not manipOccurredLow and high > accHigh
+        manipOccurredHigh := true
+        manipExtremum     := high
+
+    if manipOccurredHigh
+        manipExtremum := math.max(manipExtremum, high)
+        fvgGap = low[2] - high
+        bearFVG = fvgGap > (atr * eff_fvgThr) and close < accHigh
+
+        if bearFVG and not isTradeActive
+            box.new(accStartBar, accHigh, accEndBar, accLow, bgcolor=accColor, border_color=na)
+            box.new(accEndBar, manipExtremum, bar_index - 2, accHigh, bgcolor=manColor, border_color=na)
+            box.new(bar_index - 2, low[2], bar_index, high, bgcolor=fvgColor, border_color=fvgColor, border_style=line.style_dotted)
+
+            slDist        := atr * eff_atrMult
+            slLevel       := close + slDist
+            tpLevel       := close - (slDist * eff_rrr)
+            isTradeActive  := true
+            isBullishTrade := false
+
+            tpBox := box.new(bar_index, close, bar_index, tpLevel, bgcolor=tpColor, border_color=na)
+            slBox := box.new(bar_index, close, bar_index, slLevel, bgcolor=slColor, border_color=na)
+            label.new(bar_index, high, "AMD Bear · " + i_asset, color=color.red, style=label.style_label_down, textcolor=color.white, size=size.tiny)
+            accHigh           := na
+            manipOccurredHigh := false
+
+    // Bullish
+    if not manipOccurredLow and not manipOccurredHigh and low < accLow
+        manipOccurredLow  := true
+        manipExtremum     := low
+
+    if manipOccurredLow
+        manipExtremum := math.min(manipExtremum, low)
+        fvgGap = low - high[2]
+        bullFVG = fvgGap > (atr * eff_fvgThr) and close > accLow
+
+        if bullFVG and not isTradeActive
+            box.new(accStartBar, accHigh, accEndBar, accLow, bgcolor=accColor, border_color=na)
+            box.new(accEndBar, accLow, bar_index - 2, manipExtremum, bgcolor=manColorB, border_color=na)
+            box.new(bar_index - 2, high[2], bar_index, low, bgcolor=fvgColor, border_color=fvgColor, border_style=line.style_dotted)
+
+            slDist        := atr * eff_atrMult
+            slLevel       := close - slDist
+            tpLevel       := close + (slDist * eff_rrr)
+            isTradeActive  := true
+            isBullishTrade := true
+
+            tpBox := box.new(bar_index, close, bar_index, tpLevel, bgcolor=tpColor, border_color=na)
+            slBox := box.new(bar_index, close, bar_index, slLevel, bgcolor=slColor, border_color=na)
+            label.new(bar_index, low, "AMD Bull · " + i_asset, color=color.green, style=label.style_label_up, textcolor=color.white, size=size.tiny)
+            accHigh          := na
+            manipOccurredLow := false
+
+// =============================================================================
+// Section 9 — Alerts
+// =============================================================================
+alertcondition(not isTradeActive[1] and isTradeActive and not isBullishTrade, "AMD Bearish Setup", "AMD bearish FVG trade triggered")
+alertcondition(not isTradeActive[1] and isTradeActive and isBullishTrade,     "AMD Bullish Setup", "AMD bullish FVG trade triggered")
