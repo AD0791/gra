@@ -1,192 +1,151 @@
 // This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
 //@version=6
-indicator("AMD FVG Trade Setup — Futures Presets [LuxAlgo]", shorttitle="AMD Futures", overlay=true, max_boxes_count=500)
-
-// =============================================================================
-// Section 0 — Asset Preset (MGC / MYM / MNQ)
-// =============================================================================
-GRP_PRESET = "🎯 Asset Preset"
-i_asset = input.string("None", "Asset Preset", options=["None", "MNQ", "MGC", "MYM"], group=GRP_PRESET,
-     tooltip="Selecting an asset loads calibrated defaults and overrides the AMD / Trade / Session settings below.")
-
-// Resolved preset values — explicitly casting na to ensure type compatibility
-int    p_accLen   = i_asset == "MNQ" ? 20   : i_asset == "MGC" ? 30   : i_asset == "MYM" ? 25   : int(na)
-float  p_accWidth = i_asset == "MNQ" ? 0.15 : i_asset == "MGC" ? 0.15 : i_asset == "MYM" ? 0.20 : float(na)
-int    p_manLook  = i_asset == "MNQ" ? 10   : i_asset == "MGC" ? 15   : i_asset == "MYM" ? 12   : int(na)
-float  p_fvgThr   = i_asset == "MNQ" ? 0.15 : i_asset == "MGC" ? 0.10 : i_asset == "MYM" ? 0.10 : float(na)
-float  p_atrMult  = i_asset == "MNQ" ? 1.5  : i_asset == "MGC" ? 1.8  : i_asset == "MYM" ? 1.5  : float(na)
-float  p_rrr      = i_asset == "MNQ" ? 2.5  : i_asset == "MGC" ? 2.0  : i_asset == "MYM" ? 2.0  : float(na)
+indicator("AMD FVG Trade Setup [LuxAlgo]", shorttitle="AMD FVG", overlay=true, max_boxes_count=500, max_labels_count=500)
 
 // =============================================================================
 // Section 1 — User Inputs
 // =============================================================================
 GRP_AMD = "AMD Logic"
-accLen       = input.int(30,  "Accumulation Length",       minval=5,   group=GRP_AMD)
-accWidth     = input.float(0.2,"Accumulation Range Max %", minval=0.1, step=0.1, group=GRP_AMD)
-manLook      = input.int(10,  "Max Search Window",         minval=1,   group=GRP_AMD)
-fvgThreshold = input.float(0.1,"Min FVG Gap (ATR Multiplier)", minval=0.0, step=0.05, group=GRP_AMD,
-     tooltip="Minimum size of the FVG gap relative to ATR. Higher values require 'stronger' (larger) gaps.")
+accLen       = input.int(20,   "Accumulation Length", minval=5, group=GRP_AMD)
+accWidth     = input.float(0.15, "Accumulation Range Max %", minval=0.01, step=0.05, group=GRP_AMD)
+manLook      = input.int(25,   "Max Search Window", minval=1, group=GRP_AMD)
+fvgThreshold = input.float(0.1, "Min FVG Gap (ATR Multiplier)", minval=0.0, step=0.05, group=GRP_AMD)
 
 GRP_TRADE = "Trade Settings"
-atrLen  = input.int(14,  "ATR Length",            group=GRP_TRADE)
-atrMult = input.float(2.0,"ATR SL Multiplier",    step=0.1, group=GRP_TRADE)
-rrr     = input.float(2.0,"Reward-to-Risk Ratio", step=0.1, group=GRP_TRADE)
+atrLen  = input.int(14,   "ATR Length", group=GRP_TRADE)
+atrMult = input.float(2.0, "ATR SL Multiplier", step=0.1, group=GRP_TRADE)
+rrr     = input.float(2.0, "Reward-to-Risk Ratio", step=0.1, group=GRP_TRADE)
 
-GRP_SESS = "Sessions"
-useSydney = input.bool(false, "🌏 Sydney Session (17:00-02:00 EST)", group=GRP_SESS)
-useTokyo  = input.bool(false, "🌏 Tokyo Session (19:00-04:00 EST)",  group=GRP_SESS)
-useLondon = input.bool(false, "🌍 London Session (03:00-12:00 EST)", group=GRP_SESS)
-useNY     = input.bool(true,  "🌎 New York Session (08:00-17:00 EST)", group=GRP_SESS)
-showSess  = input.bool(true,  "Highlight Active Session Time",        group=GRP_SESS)
+GRP_SESS = "Sessions (EST)"
+useSydney = input.bool(false, "Sydney", group=GRP_SESS)
+useTokyo  = input.bool(false, "Tokyo", group=GRP_SESS)
+useLondon = input.bool(false, "London", group=GRP_SESS)
+useNY     = input.bool(true,  "New York", group=GRP_SESS)
+showSess  = input.bool(true,  "Highlight Sessions", group=GRP_SESS)
 
 GRP_COL = "Colors"
-accColor  = input.color(color.new(color.gray, 80), "Accumulation",         group=GRP_COL)
-manColor  = input.color(color.new(#f23645, 75),    "Manipulation (Bear)",  group=GRP_COL)
-manColorB = input.color(color.new(#089981, 75),    "Manipulation (Bull)",  group=GRP_COL)
-tpColor   = input.color(color.new(#089981, 75),    "Take Profit Box",      group=GRP_COL)
-slColor   = input.color(color.new(#f23645, 75),    "Stop Loss Box",        group=GRP_COL)
-fvgColor  = input.color(color.new(color.white, 60),"FVG Color",            group=GRP_COL)
+accColor  = input.color(color.new(color.gray, 85), "Accumulation", group=GRP_COL)
+manColor  = input.color(color.new(#f23645, 80),    "Manipulation (Bear)", group=GRP_COL)
+manColorB = input.color(color.new(#089981, 80),    "Manipulation (Bull)", group=GRP_COL)
+tpColor   = input.color(color.new(#089981, 80),    "Take Profit", group=GRP_COL)
+slColor   = input.color(color.new(#f23645, 80),    "Stop Loss", group=GRP_COL)
+fvgColor  = input.color(color.new(color.white, 70), "FVG Highlight", group=GRP_COL)
 
 // =============================================================================
-// Section 2 — Merge preset with manual inputs
-// =============================================================================
-eff_accLen   = not na(p_accLen)   ? p_accLen   : accLen
-eff_accWidth = not na(p_accWidth) ? p_accWidth : accWidth
-eff_manLook  = not na(p_manLook)  ? p_manLook  : manLook
-eff_fvgThr   = not na(p_fvgThr)   ? p_fvgThr   : fvgThreshold
-eff_atrMult  = not na(p_atrMult)  ? p_atrMult  : atrMult
-eff_rrr      = not na(p_rrr)      ? p_rrr       : rrr
-
-// Explicitly handle boolean overrides without na to satisfy strict typing
-eff_useLondon = i_asset == "MGC" ? true : useLondon
-eff_useNY     = i_asset != "None" ? true : useNY
-
-// =============================================================================
-// Section 3 — Session Logic
+// Section 2 — Helper Logic
 // =============================================================================
 inSession(sess) => not na(time(timeframe.period, sess, "America/New_York"))
 
-isInAnySession = (useSydney    and inSession("1700-0200")) or
-                 (useTokyo     and inSession("1900-0400")) or
-                 (eff_useLondon and inSession("0300-1200")) or
-                 (eff_useNY     and inSession("0800-1700"))
+isInSession = (useSydney and inSession("1700-0200")) or
+              (useTokyo  and inSession("1900-0400")) or
+              (useLondon and inSession("0300-1200")) or
+              (useNY     and inSession("0800-1700"))
 
-bgcolor(showSess and isInAnySession ? color.new(color.blue, 96) : na)
-
-// =============================================================================
-// Section 4 — State
-// =============================================================================
-var float accHigh = na
-var float accLow  = na
-var int   accStartBar = na
-var int   accEndBar   = na
-var bool  manipOccurredHigh = false
-var bool  manipOccurredLow  = false
-var float manipExtremum = na
-
-var box   tpBox = na
-var box   slBox = na
-var float tpLevel = na
-var float slLevel = na
-var bool  isTradeActive  = false
-var bool  isBullishTrade = false
-
-// =============================================================================
-// Section 5 — Accumulation Detection
-// =============================================================================
-highs    = ta.highest(high, eff_accLen)
-lows     = ta.lowest(low,  eff_accLen)
-rangePct = (highs - lows) / lows * 100
-isAccumulating = rangePct <= eff_accWidth and isInAnySession
-
-if isAccumulating
-    accHigh         := highs
-    accLow          := lows
-    accStartBar     := bar_index - eff_accLen + 1
-    accEndBar       := bar_index
-    manipOccurredHigh := false
-    manipOccurredLow  := false
-    manipExtremum     := na
-
-// =============================================================================
-// Section 6 — ATR
-// =============================================================================
+bgcolor(showSess and isInSession ? color.new(color.blue, 98) : na)
 atr = ta.atr(atrLen)
 
 // =============================================================================
-// Section 7 — Active Trade Box Extension & Exit Check
+// Section 3 — State Variables
+// =============================================================================
+var float accH = na, var float accL = na
+var int accStartTime = na, var int accEndTime = na
+var bool hasManipH = false, var bool hasManipL = false
+var float manipExt = na, var int manipEndTime = na
+
+var box tpBox = na, var box slBox = na
+var float tpPrice = na, var float slPrice = na
+var bool isTradeActive = false, var bool isBullish = false
+
+// =============================================================================
+// Section 4 — Accumulation Detection
+// =============================================================================
+hVal = ta.highest(high, accLen)
+lVal = ta.lowest(low, accLen)
+rangePct = (hVal - lVal) / lVal * 100
+isAcc = rangePct <= accWidth and isInSession
+
+if isAcc
+    accH := hVal
+    accL := lVal
+    accStartTime := time[accLen - 1]
+    accEndTime := time
+    hasManipH := false
+    hasManipL := false
+    manipExt := na
+    manipEndTime := na
+
+// =============================================================================
+// Section 5 — Trade Management
 // =============================================================================
 if isTradeActive
-    tpBox.set_right(bar_index)
-    slBox.set_right(bar_index)
-    if isBullishTrade
-        if low <= slLevel or high >= tpLevel
+    tpBox.set_right(time_close)
+    slBox.set_right(time_close)
+    if isBullish
+        if low <= slPrice or high >= tpPrice
             isTradeActive := false
     else
-        if high >= slLevel or low <= tpLevel
+        if high >= slPrice or low <= tpPrice
             isTradeActive := false
 
 // =============================================================================
-// Section 8 — Manipulation + FVG Search
+// Section 6 — AMD Logic (Strictly using TIME for sync)
 // =============================================================================
-if not isAccumulating and not na(accHigh) and bar_index <= accEndBar + eff_manLook and isInAnySession
+canSearch = not isAcc and not na(accH) and time <= accEndTime + (manLook * timeframe.in_seconds() * 1000)
 
-    // Bearish logic
-    if not manipOccurredHigh and not manipOccurredLow and high > accHigh
-        manipOccurredHigh := true
-        manipExtremum     := high
+if canSearch
+    // Bearish Logic
+    if not hasManipH and not hasManipL and high > accH
+        hasManipH := true
+        manipExt := high
+    
+    if hasManipH
+        manipExt := math.max(manipExt, high)
+        // FVG Check: Gap between bar 2 low and current high
+        isBearFVG = (low[2] - high) > (atr * fvgThreshold) and close < accH
+        
+        if isBearFVG and not isTradeActive
+            // Draw Accumulation
+            box.new(accStartTime, accH, accEndTime, accL, bgcolor=accColor, border_color=na, xloc=xloc.bar_time)
+            // Draw Manipulation (from end of acc to start of FVG)
+            box.new(accEndTime, manipExt, time[2], accH, bgcolor=manColor, border_color=na, xloc=xloc.bar_time)
+            // Draw FVG
+            box.new(time[2], low[2], time, high, bgcolor=fvgColor, border_color=na, xloc=xloc.bar_time)
+            
+            slPrice := close + (atr * atrMult)
+            tpPrice := close - (atr * atrMult * rrr)
+            isTradeActive := true
+            isBullish := false
+            
+            tpBox := box.new(time, close, time_close, tpPrice, bgcolor=tpColor, border_color=na, xloc=xloc.bar_time)
+            slBox := box.new(time, close, time_close, slPrice, bgcolor=slColor, border_color=na, xloc=xloc.bar_time)
+            label.new(time, high, "AMD Bear", color=color.red, style=label.style_label_down, textcolor=color.white, size=size.tiny, xloc=xloc.bar_time)
+            accH := na // Reset
 
-    if manipOccurredHigh
-        manipExtremum := math.max(manipExtremum, high)
-        fvgGap = low[2] - high
-        bearFVG = fvgGap > (atr * eff_fvgThr) and close < accHigh
+    // Bullish Logic
+    if not hasManipL and not hasManipH and low < accL
+        hasManipL := true
+        manipExt := low
+        
+    if hasManipL
+        manipExt := math.min(manipExt, low)
+        // FVG Check: Gap between current low and bar 2 high
+        isBullFVG = (low - high[2]) > (atr * fvgThreshold) and close > accL
+        
+        if isBullFVG and not isTradeActive
+            box.new(accStartTime, accH, accEndTime, accL, bgcolor=accColor, border_color=na, xloc=xloc.bar_time)
+            box.new(accEndTime, accL, time[2], manipExt, bgcolor=manColorB, border_color=na, xloc=xloc.bar_time)
+            box.new(time[2], high[2], time, low, bgcolor=fvgColor, border_color=na, xloc=xloc.bar_time)
+            
+            slPrice := close - (atr * atrMult)
+            tpPrice := close + (atr * atrMult * rrr)
+            isTradeActive := true
+            isBullish := true
+            
+            tpBox := box.new(time, close, time_close, tpPrice, bgcolor=tpColor, border_color=na, xloc=xloc.bar_time)
+            slBox := box.new(time, close, time_close, slPrice, bgcolor=slColor, border_color=na, xloc=xloc.bar_time)
+            label.new(time, low, "AMD Bull", color=color.green, style=label.style_label_up, textcolor=color.white, size=size.tiny, xloc=xloc.bar_time)
+            accH := na // Reset
 
-        if bearFVG and not isTradeActive
-            box.new(accStartBar, accHigh, accEndBar, accLow, bgcolor=accColor, border_color=na)
-            box.new(accEndBar, manipExtremum, bar_index - 2, accHigh, bgcolor=manColor, border_color=na)
-            box.new(bar_index - 2, low[2], bar_index, high, bgcolor=fvgColor, border_color=fvgColor, border_style=line.style_dotted)
-
-            float slDist  = atr * eff_atrMult
-            slLevel       := close + slDist
-            tpLevel       := close - (slDist * eff_rrr)
-            isTradeActive  := true
-            isBullishTrade := false
-
-            tpBox := box.new(bar_index, close, bar_index, tpLevel, bgcolor=tpColor, border_color=na)
-            slBox := box.new(bar_index, close, bar_index, slLevel, bgcolor=slColor, border_color=na)
-            label.new(bar_index, high, "AMD Bear · " + i_asset, color=color.red, style=label.style_label_down, textcolor=color.white, size=size.tiny)
-            accHigh           := na
-            manipOccurredHigh := false
-
-    // Bullish logic
-    if not manipOccurredLow and not manipOccurredHigh and low < accLow
-        manipOccurredLow  := true
-        manipExtremum     := low
-
-    if manipOccurredLow
-        manipExtremum := math.min(manipExtremum, low)
-        fvgGap = low - high[2]
-        bullFVG = fvgGap > (atr * eff_fvgThr) and close > accLow
-
-        if bullFVG and not isTradeActive
-            box.new(accStartBar, accHigh, accEndBar, accLow, bgcolor=accColor, border_color=na)
-            box.new(accEndBar, accLow, bar_index - 2, manipExtremum, bgcolor=manColorB, border_color=na)
-            box.new(bar_index - 2, high[2], bar_index, low, bgcolor=fvgColor, border_color=fvgColor, border_style=line.style_dotted)
-
-            float slDist  = atr * eff_atrMult
-            slLevel       := close - slDist
-            tpLevel       := close + (slDist * eff_rrr)
-            isTradeActive  := true
-            isBullishTrade := true
-
-            tpBox := box.new(bar_index, close, bar_index, tpLevel, bgcolor=tpColor, border_color=na)
-            slBox := box.new(bar_index, close, bar_index, slLevel, bgcolor=slColor, border_color=na)
-            label.new(bar_index, low, "AMD Bull · " + i_asset, color=color.green, style=label.style_label_up, textcolor=color.white, size=size.tiny)
-            accHigh          := na
-            manipOccurredLow := false
-
-// =============================================================================
-// Section 9 — Alerts
-// =============================================================================
-alertcondition(not isTradeActive[1] and isTradeActive and not isBullishTrade, "AMD Bearish Setup", "AMD bearish FVG trade triggered")
-alertcondition(not isTradeActive[1] and isTradeActive and isBullishTrade,     "AMD Bullish Setup", "AMD bullish FVG trade triggered")
+// Cleanup if search window expires
+if time > accEndTime + (manLook * timeframe.in_seconds() * 1000)
+    accH := na
